@@ -6,6 +6,10 @@
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"
+# sbatch propagates this environment to every job (default --export=ALL), so the clean
+# package layout (pto at the root, polystep under polystep/src) resolves inside each job.
+export PYTHONPATH="$REPO:$REPO/script:$REPO/polystep/src:${PYTHONPATH:-}"
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
 WAVE_SIZE="${1:-8}"
 LOG="$REPO/results/wave_submission.log"
 mkdir -p "$REPO/results"; : > "$LOG"
