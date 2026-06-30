@@ -2,6 +2,7 @@
 #SBATCH --job-name=repro-cfgsweep_knapw
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.err
+#SBATCH --gres=gpu:1
 set -uo pipefail
 cd "${SLURM_SUBMIT_DIR:-$HOME/ot-or-project}"
 export PATH="$HOME/.local/bin:$HOME/.juliaup/bin:$PATH"
