@@ -1,0 +1,20 @@
+# Harness and experiment dependencies. The PolyStep library itself is installed
+# from ./polystep (pip install -e ./polystep) and pulls torch and numpy.
+numpy
+scipy
+pandas
+matplotlib
+torch
+torchvision
+gurobipy
+pyepo
+scikit-learn
+# optimization-oracle baselines (SPO+, PFYL, IMLE, cvxpylayers)
+cvxpy
+cvxpylayers
+pytorch-lightning
+# data and figures for the named and real-feature benchmarks
+pyproj
+contextily
+plotly
+yfinance

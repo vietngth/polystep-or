@@ -1,0 +1,13 @@
+--- /tmp/claude-1000/-media-anindex-Data-ot-or-project/eb8c8aab-4d2e-4e9a-9f32-d20c96478c25/scratchpad/fresh_InferOpt_DSIRP/src/sirp_model.jl	2026-06-30 21:05:11.701846482 +0200
++++ src/sirp_model.jl	2026-06-30 21:08:12.660774600 +0200
+@@ -178,6 +178,10 @@
+         instance.max_inventory[_id] = data["max_inventory"][id]
+         if pattern=="bimodal"
+             instance.start_inventory[_id] = data["max_inventory"][id] - mean(data["mean_demand"][id])
++        elseif pattern=="uniform"
++            # uniform-10 instances ship no mean_demand; the authors' demand is Uniform(0, 0.5*max)
++            # (see sample_demands below), whose mean is 0.25*max, so the (start = max - mean) rule gives 0.75*max.
++            instance.start_inventory[_id] = 0.75 * data["max_inventory"][id]
+         else
+             instance.start_inventory[_id] = data["max_inventory"][id] - data["mean_demand"][id]
+         end

@@ -1,0 +1,8 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+
+# Jupyter notebooks
+*.ipynb_checkpoints
+*.ipynb
+!instances/generator.ipynb
+*.DS_Store

@@ -1,0 +1,554 @@
+\documentclass[10pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{longtable,booktabs,array}
+\usepackage{microtype}
+\usepackage[hidelinks]{hyperref}
+\usepackage{titlesec}
+\titleformat{\section}{\large\bfseries}{}{0pt}{}
+\setlength{\parindent}{0pt}\setlength{\parskip}{4pt}
+\renewcommand{\arraystretch}{1.15}
+\title{\textbf{PolyStep for Operations Research: Faithful-Reuse Report}}
+\author{}\date{}
+\begin{document}\maketitle\vspace{-2em}
+
+\section*{Faithful-Reuse Audit: PolyStep Decision-Focused-Learning Study}
+
+Project root: \texttt{/media/anindex/Data/ot-or-project}. This report documents, for each experiment, which upstream or
+author code was reused and from where, exactly which parts were changed locally and why, and whether the run used
+the authors' paper-default configuration. The governing rule audited is: for any benchmark whose authors released
+code, reuse THEIR code at the PAPER-DEFAULT setting (cross-checked against code defaults); implement from scratch
+ONLY where no author code exists; and bring the PolyStep method ONLY from its own pristine repository.
+
+\section*{Top-level summary}
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{PolyStep is used unmodified from its own repository.} The library at \texttt{/media/anindex/Data/ot-or-project/polystep}
+\end{itemize}
+  has an empty working tree (\texttt{git -C polystep status --porcelain} returns nothing), tracks upstream
+  \texttt{https://github.com/anindex/polystep.git}, and sits at commit \texttt{3c1d14f}. Every Python experiment imports it the
+  same way, \texttt{sys.path.insert(0, "polystep/src"); from polystep import PolyStepOptimizer} (plus
+  \texttt{polystep.epsilon.CosineEpsilon}, \texttt{polystep.hybrid\_subspace}, \texttt{polystep.transform}). One script,
+  \texttt{exp\_spotree\_polystep.py}, uses the lower-level \texttt{from polystep.solver import PolyStep} entry point for a
+  free-function objective, still from the same pristine package. No local copy or edit of PolyStep math exists.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{Benchmarks that reuse authors' code verbatim (reused-as-is):}
+\end{itemize}
+  the entire PyEPO library (data generators for shortest-path / knapsack / TSP / portfolio, the Gurobi optimization
+  models, the \texttt{pyepo.metric.regret} evaluator, and the full surrogate/DFL baseline suite SPO+, DBB, DPO, IMLE, PFYL,
+  NCE, LTR, PG); the Globe-TSP Gurobi cutting-plane solver and DBB autograd function from \texttt{martius-lab/blackbox-backprop};
+  the Blossom V min-cost-matching solver from \texttt{blossom\_python}; the ICON benchmark (data, \texttt{SolveICON} Gurobi ILP, and
+  all three baselines from \texttt{predopt-benchmarks}); the IEEE-CIS MA\&RE Gurobi MILP optimiser and data loaders; the Amazon
+  ALMRRC OR-tools reference router and official \texttt{rc-cli} scorer; the SPOTree predictor and its Gurobi shortest-path
+  solver; and the ODECE knapsack data generators (generator only, see below).
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{Benchmarks adapted from authors' artifacts (adapted):}
+\end{itemize}
+  the DistrictNet Julia codebase (upstream code reused, with a new PolyStep estimator, feasibility repair, and reduced
+  compute budgets, detailed below); the Toni / DSIRP inventory-routing column (authors' released instances and trained
+  GLM weights reused, with a uniform-demand branch added); the ODECE MDKP experiments (authors' generator reused, their
+  solver and loss NOT run, their published numbers cited from \texttt{Results/}); and the POLSKA max-flow and ABILENE
+  min-cost-vertex-cover experiments (authors' shipped topology and instance files reused, objective/correction-function
+  definitions ported, batched solvers reimplemented).
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{Benchmarks implemented from the paper because no reusable author code exists (original-following-paper):}
+\end{itemize}
+  SFGE (a score-function / REINFORCE estimator following Silvestri et al., JAIR 2024; no SFGE package exists); the
+  synthetic prediction-in-constraint problems (uncertain-consumption knapsack, the L0 to L4 constraint ladder, the
+  MDKP-consumption family, the WSMC set-multicover); the GPU-batched constraint solvers in \texttt{pto/solvers.py} (each
+  validated against Gurobi or cvxpy); the Warcraft Bellman-Ford solver and CNN (reimplemented to the paper, validated
+  against the dataset's stored optima); the IRP predict to CPCTSP to simulate pipeline (a faithful Python port of
+  Greif et al.'s released Julia, plus an original GPU-batched exact CPCTSP solver validated against Gurobi); and all
+  oracle-cost and scaling measurement harnesses.
+
+A single methodological caveat applies to DistrictNet: the local runs reduced several compute budgets below the
+paper defaults (Gurobi/ILS \texttt{MAX\_TIME} 1200 s to 120 s, GNN epochs cut, evaluation \texttt{NB\_SCENARIO} 10 to 50). These are
+documented per file below so the report can state the deviation plainly.
+
+\medskip\hrule\medskip
+
+\section*{Shared harness provenance (\texttt{pto/})}
+
+The Python experiments share the \texttt{pto/} package. Its problem and baseline provenance underpins most entries below.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{Problems.} \texttt{pto/capability.py} (lines 14-18) imports the canonical four problems directly from PyEPO:
+\end{itemize}
+  \texttt{pyepo.data.\{shortestpath,knapsack,tsp,portfolio\}}, `pyepo.model.grb.\{shortestPathModel,knapsackModel,tspMTZModel,
+  portfolioModel\}\texttt{, }pyepo.data.dataset.optDataset\texttt{, and }pyepo.func\texttt{. }pto/problems.py` adds a parallel set:
+  \texttt{ShortestPath} (also PyEPO-backed) plus the original synthetic generators \texttt{TerrainSP}, \texttt{KnapsackWeights}, and
+  \texttt{MDKPConsumption}.
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{Baselines.} SPO+ is PyEPO's native \texttt{pyepo.func.SPOPlus} (Elmachtoub and Grigas 2022); the full DFL suite (DBB,
+\end{itemize}
+  NID, DPO, IMLE, PFYL, NCE, LTR, PG) is taken from \texttt{pyepo.func}. None of these is reimplemented. \texttt{two-stage} is a
+  trivial local MSE trainer. \texttt{SFGE} is an original score-function trainer following Silvestri et al. (JAIR 2024), with
+  no author package available.
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{Solvers and accounting.} \texttt{pto/solvers.py} holds our batched GPU solvers (knapsack DP, fractional knapsack, MDKP
+\end{itemize}
+  greedy, set-multicover, max-flow, etc.), each validated against Gurobi or cvxpy. \texttt{pto/budget.py} provides the
+  \texttt{SolveCounter}, \texttt{Timer}, and Gurobi-solve accounting used by the scaling and oracle-cost studies.
+
+\medskip\hrule\medskip
+
+\section*{Core benchmark / methods experiments}
+
+These run on PyEPO synthetic data with PyEPO baselines, so they are classified as reused-as-is for the PyEPO problems
+and baselines, original-following-paper for SFGE, and pristine import for PolyStep. All are warm-started from the same
+two-stage model unless noted.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{challenge\_established.py}.} Data: PyEPO shortest-path / knapsack / TSP / portfolio via \texttt{pto.capability} setups.
+\end{itemize}
+  Solver: PyEPO Gurobi models for the regret metric, batched GPU solvers inside the PolyStep/SFGE closures. Methods:
+  two-stage, SPO+/PFYL/IMLE (PyEPO), SFGE, PolyStep, all sharing one two-stage warm start (fairness protocol). Config:
+  deg in \{2,4,6\}, seeds \{0,1,2\}, DFL warm epochs 30, PolyStep 150 steps, SFGE 120 epochs / 8 samples, batch 128. PyEPO
+  data generators at their defaults.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_fair\_batched\_spo.py}.} Adds a second SPO+ backend: "SPO+" is PyEPO's per-instance Gurobi \texttt{F.SPOPlus}, while
+\end{itemize}
+  "SPO+(batched)" reimplements the exact SPO+ subgradient (\texttt{\_BatchedSPOPlusFunc}) on the shared batched GPU oracle,
+  mirroring \texttt{pyepo.func.surrogate.SPOPlusFunc} term-for-term and checked equal to Gurobi by \texttt{verify\_oracle}. The batched
+  variant is an adapted backend of PyEPO's algorithm, not a new method. Config FULL = \{SPO 30 epochs, PolyStep 150
+  steps, SFGE 120 epochs / 8 samples\}, lr 1e-2, deg 4, seeds \{0,1,2\}.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_polystep\_vs\_sfge.py}.} PyEPO shortest-path and knapsack only. SFGE versus PolyStep head-to-head with
+\end{itemize}
+  two-stage / SPO+ / IMLE as references. Uses per-method tuned hyperparameters in \texttt{BEST} from prior LR sweeps and
+  \texttt{pto.sweep\_lr.train\_spoplus\_lr}. Config: knapsack dims \{10,20,50,100,200\}, seeds \{0..4\}, plus sigma / probe-radius
+  sensitivity grids. PyEPO data at defaults; PolyStep pristine.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_polystep\_bench.py}.} PyEPO four problems, three polytopes (orthoplex / simplex / cube). Compares the full
+\end{itemize}
+  PyEPO DFL suite plus two-stage plus PolyStep, with PolyStep hyperparameters loaded per (problem, polytope) from
+  \texttt{exp\_results/polystep\_tune.json}. Wilcoxon(PolyStep < SPO+). 5 seeds, deg 4. PyEPO baselines reused-as-is.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_polystep\_tune.py}} and \textbf{\texttt{exp\_polystep\_ablation.py}.} PolyStep-only utilities over the PyEPO setups.
+\end{itemize}
+  \texttt{tune} grids probe count \{1,2,4\} and radii and writes the JSON the bench consumes; \texttt{ablation} sweeps polytope x probe
+  over 5 seeds. Both warm-start from two-stage. Pristine PolyStep on PyEPO synthetic data.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_sfge\_suite.py}.} Two problems straight from the SFGE paper (Silvestri et al., JAIR 2024): unknown-weight
+\end{itemize}
+  knapsack and weighted set multi-cover, with prediction in the constraints. Features come from
+  \texttt{pyepo.data.knapsack.genData}; the solvers are ours (\texttt{solve\_fractional\_knapsack} checked vs cvxpy, \texttt{solve\_set\_multicover}
+  gap-checked vs a Gurobi exact ILP). SPO+/IMLE/PFYL/DBB declared not-applicable because the optimization-oracle camp is
+  undefined for constraint prediction. Classification: original problem and solver implementation following the SFGE
+  paper, original SFGE, pristine PolyStep.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_spo\_convergence.py}.} Epoch-grid convergence of SPO+ (PyEPO native) and SFGE, with a tuned PolyStep reference
+\end{itemize}
+  line, all warm-started from one two-stage model. Reviewer-inoculation sweep, not a new comparison. Epoch grid
+  \{5..160\}, seeds \{0..4\}, deg 4.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{cross\_sfge.py}.} Two-stage, SPO+ (PyEPO via \texttt{train\_dfl}), SFGE, PolyStep on the four PyEPO problems, all
+\end{itemize}
+  warm-started from two-stage, capability defaults, seeds \{42,43,44\}.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{fair\_init.py}.} A fairness control on PyEPO knapsack only: compares cold (all from scratch) versus warm (all from
+\end{itemize}
+  two-stage) initialization across SPO+ (PyEPO), SFGE, PolyStep. Not a benchmark. Seeds \{0,1,2\}, deg 4, lr 1e-2.
+
+\medskip\hrule\medskip
+
+\section*{Prediction-in-constraint / harder experiments}
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{blackbox\_constraint.py}.} Data: PyEPO \texttt{knapsack.genData} features, with the predicted quantity placed in the
+\end{itemize}
+  capacity constraint (a construction original to this project; no author code). Solver: ours, exact batched 0/1
+  knapsack DP (\texttt{pto.solvers.knap1\_dp}). Methods: two-stage, SFGE, PolyStep (SPO+/PFYL/IMLE structurally not-applicable).
+  Classification: original-following-paper on the PyEPO knapsack generator (used at defaults).
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_constraint\_complexity.py}.} Data: a self-contained synthetic generator with an L0 to L4 constraint-type
+\end{itemize}
+  ladder (box, linear, cardinality, conic, prediction-coupled), the script's own design. Solver: ours, batched GPU
+  greedy per level, verified against a Gurobi exact MIQCP. Methods: two-stage / SFGE / PolyStep with sigma and
+  probe-radius fragility sweeps. Classification: original implementation (no released author code).
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_constraint\_scaling.py}.} Two regimes: the constraint regime uses \texttt{pto.problems.MDKPConsumption} (original
+\end{itemize}
+  synthetic generator, solver \texttt{pto.solvers.mdkp\_greedy}); the contrast regime uses PyEPO \texttt{knapsack.genData} +
+  \texttt{knapsackModel} so SPO+ applies. Classification: original for the MDKP-consumption regime, reused-as-is for the PyEPO
+  SPO+ contrast.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_manyconstraints.py}.} Regime 1 is PyEPO grid shortest-path (\texttt{pto.problems.ShortestPath} + PyEPO Gurobi DAG
+\end{itemize}
+  solver + SPO+); regime 2 is the synthetic \texttt{MDKPConsumption}. Classification: adapted (PyEPO shortest-path reused) plus
+  original (MDKP).
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_odece\_full.py}} and \textbf{\texttt{exp\_odece\_mdkp.py}.} Data: the ODECE author generators are reused as-is,
+\end{itemize}
+  \texttt{from OptProblems.knapsack.kpdata import genCapacity, genWeights} (from \texttt{baselines/odece\_neurips25}), at settings
+  matched to ODECE's shell scripts (\texttt{MDKP\_CapaExp.sh}, \texttt{MDKP\_WeightExp.py}): 50 items, dim 3, deg 6, noise 0.25, seeds
+  \{11..15\}, capacity ratio \{0.18,0.20,0.22\}. Solver: OURS, \texttt{pto.solvers.mdkp\_greedy} + \texttt{mdkp\_repair} for deploy and a
+  local Gurobi MDKP for the true-optimum oracle. ODECE's own solver and loss are NOT imported or run (run separately in
+  ODECE's pinned environment); ODECE's published metrics are cited from \texttt{baselines/odece\_neurips25/Results/}. Methods:
+  two-stage / SFGE / PolyStep live, ODECE and MSE numbers tabulated from \texttt{Results/}. Classification: adapted (problem
+  generator reused as-is, solver and methods original). Paper-default settings, matching the ODECE scripts.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_maxflow\_polska.py}.} Data: the POLSKA topology is loaded from the shipped file
+\end{itemize}
+  \texttt{baselines/cpaior23\_branch\_and\_learn/Max Flow/data/graph\_POLSKA.txt} (12 nodes, 18 edges, not hardcoded) with per-fold
+  \texttt{train/test\_POLSKA(k).txt} instances. Solver: ours, a batched GPU max-flow plus an exact batched port of the authors'
+  Correction-Function-A, validated to <= 1e-3 against a numpy reference and Gurobi LP; the authors' C++ binaries are not
+  invoked. Methods: two-stage / SFGE / PolyStep with a per-edge \texttt{Linear(8,1)} predictor mirroring \texttt{Ridge\_para\_POLSKA}.
+  Classification: adapted (authors' data and correction-function reused faithfully, solver reimplemented).
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_mcvc\_abilene.py}.} Data: the ABILENE topology and feature/label instances are loaded from
+\end{itemize}
+  \texttt{baselines/cpaior23\_branch\_and\_learn/MCVC/} (12 nodes, 15 edges, from file). Solver: ours, a batched exact
+  brute-force min-cost vertex cover over all 2\textasciicircum{}12 subsets, validated against Gurobi ILP and the authors' \texttt{test.cpp}
+  regret; the realized objective and penalty are ported from \texttt{test.cpp}. Classification: adapted (data and objective
+  reused, exact solver reimplemented).
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{interpretable\_predictor.py}.} Data: PyEPO problems (knapsack / shortest-path / portfolio / TSP) with PyEPO
+\end{itemize}
+  Gurobi solvers and \texttt{metric.regret}. The non-differentiable predictor is NOT sklearn: it is a custom batched hard
+  axis-aligned tree (\texttt{HardTree}) initialized by a hand-written greedy CART fit, which PolyStep then refines on realized
+  regret (a numerical demo shows zero gradient). Classification: original implementation (custom tree), PyEPO problems
+  reused.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_spotree\_polystep.py}.} Data: the authors' real SPO-Tree shortest-path dataset (\texttt{non\_linear\_data\_dim4.p},
+\end{itemize}
+  Elmachtoub-Liang-McNellis). Solver: the authors' Gurobi shortest-path solver reused directly
+  (\texttt{from decision\_problem\_solver import find\_opt\_decision}). Predictor: the authors' \texttt{SPOTree} / CART class
+  (\texttt{from SPO\_tree\_greedy import SPOTree}); PolyStep refines the fixed-topology tree's split thresholds. Config is the
+  ICML'20 paper default (n\_train 200, deg in \{2,10\}, max\_depth 3, min\_weights\_per\_node 20, CART pruning on 20\% val, 10
+  reps). Classification: reused-as-is for the predictor, solver, and dataset, with the PolyStep refinement layer as the
+  only addition.
+
+\medskip\hrule\medskip
+
+\section*{Named / real-feature benchmarks}
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_warcraft.py}.} Data: the real Vlastelica/Pogancic Warcraft 12x12 "oneskin" release under
+\end{itemize}
+  \texttt{data/warcraft/warcraft\_shortest\_path\_oneskin/12x12/} (train/val/test maps, vertex weights, shortest paths). Solver:
+  an ORIGINAL hand-written batched GPU Bellman-Ford with 8-connectivity and backtrack, validated against the dataset's
+  stored optimal masks (not the authors' Dijkstra). The blackbox-differentiation autograd function follows Vlastelica
+  ICLR 2020 but is reimplemented around the local solver. Feature model: a CNN, including \texttt{CombResNet18}, the paper's
+  truncated ResNet18. Methods: two-stage, blackbox-differentiation (lam 20), PolyStep over a \texttt{LinearSubspace}.
+  Classification: original-following-paper for both the solver and the CNN (dataset is authors' real data). This is the
+  one named benchmark that deviates from strict solver reuse, the deviation being a validated reimplementation.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_tsp\_embed.py}.} Data: the real Globe-TSP release under \texttt{data/globe\_tsp/\{k\}\_countries\_from\_100/} (country
+\end{itemize}
+  flags, GPS, geodesic distance matrices, optimal-tour labels). Solver: REUSED-AS-IS, \texttt{gurobi\_tsp} and \texttt{\_subtour}
+  copied verbatim from \texttt{martius-lab/blackbox-backprop} (\texttt{travelling\_salesman.py}), a Gurobi MIP with lazy
+  subtour-elimination cuts; the authors' \texttt{TspSolver} DBB autograd function is reused with one documented fix
+  (\texttt{ctx.suggested\_tours} set in forward to remove an upstream AssertionError) and a static-method API update. Feature
+  model: a shared per-flag CNN predicting a 3-D coordinate inducing a Euclidean distance matrix. Methods: two-stage,
+  blackbox-diff (lam 20), PolyStep. Config: k in \{5,10\}, n\_train 10000. Classification: solver reused-as-is (with a
+  documented bug-fix), CNN original-following-paper.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_matching\_embed.py}.} Data: SYNTHETIC, regenerated from the paper's defined process because the original
+\end{itemize}
+  Edmond dataset URL is dead and the migrated file lacks the per-digit values needed for the cost metric; built from a
+  local MNIST cache with the paper's two-digit edge cost \texttt{10*d\_lo + d\_hi}, the 4x4 grid edge list taken verbatim from
+  the blackbox-differentiation \texttt{data/utils.py}. Solver: REUSED-AS-IS, the vendored Blossom V min-cost perfect matching
+  from \texttt{blossom\_python} (built under \texttt{data/mnist\_matching/blossom\_build/}), with a networkx exact fallback; the authors'
+  \texttt{MinCostPerfectMatchingSolver} DBB autograd function is reused. Feature model: a GroupNorm CNN. Classification: solver
+  reused-as-is, CNN original-following-paper, data original-following-paper (forced regeneration, documented).
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_amazon\_polystep.py}.} Data: the official Amazon ALMRRC 2021 challenge data, expected under
+\end{itemize}
+  \texttt{data/amazon\_lmrrc/} but NOT currently on disk (only \texttt{exp\_results/amazon\_lmrrc.json} from an earlier run remains, so
+  the dataset must be re-fetched for reproduction). Solver: REUSED-AS-IS, the AWS reference router
+  \texttt{aro.model.zone\_utils.zone\_based\_tsp} (PPM zone ordering + per-zone OR-tools TSP) from
+  \texttt{baselines/amazon-routing-challenge-sol/}, scored verbatim by the official \texttt{baselines/rc-cli/scoring/score.py}.
+  Feature model: a small \texttt{ZoneNet} MLP replacing the hand-crafted PPM affinity. Methods: PolyStep only as learner
+  (minimizes the realized official score, label-free), with the reference PPM as baseline. Classification: solver and
+  scorer reused-as-is, predictor original by design, data prep adapted (faithful node-order and travel-time rebuild).
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_icon\_polystep.py}.} Data: the real ICON energy-scheduling benchmark (Irish SEMO 2013 prices \texttt{prices2013.dat},
+\end{itemize}
+  scheduling instances \texttt{load\{1,2,3\}/day01.txt}) via \texttt{baselines/predopt-benchmarks/Energy/Trainer}, split 550/100/142
+  days (paper default). Solver: REUSED-AS-IS, \texttt{Trainer.comb\_solver.SolveICON} (exact Gurobi ILP) plus \texttt{batch\_solve},
+  \texttt{regret\_fn}, \texttt{data\_reading}. Feature model: the paper's \texttt{nn.Linear(nfeat,1)}. Methods: the authors' Lightning modules
+  reused verbatim (\texttt{baseline\_mse}, \texttt{SPO}, \texttt{DBB}) at their config.json LRs, plus PolyStep as the sole addition. qpth /
+  cvxpy are stubbed only at import time for unused DCOL/QPTL models. Classification: reused-as-is for data, solver,
+  metric, and all baselines; PolyStep added. Paper-default config.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_ieee\_polystep.py}.} Data: the real IEEE-CIS 3rd Technical Challenge phase-1 data (instances, scenarios, and
+\end{itemize}
+  Oct-2020 actuals \texttt{All\_data.csv}) under \texttt{baselines/mare\_optimiser/COMPETITION DATASET FILES/}. Solver: REUSED-AS-IS,
+  the co-author MA\&RE Gurobi MILP optimiser (\texttt{Optimizer.py}, \texttt{Instance.py}, \texttt{Data.py}, \texttt{Setting}, \texttt{Util}, \texttt{Solution})
+  from \texttt{baselines/mare\_optimiser/codes/python}. A local \texttt{schedule\_cost} helper re-implements the exact quadratic
+  peak-demand charge to mirror \texttt{Optimizer.create\_objective()} for the fixed-solution evaluation path. Feature model: a
+  6-parameter calendar-basis forecast-rescaling predictor (zero-init equals two-stage). Methods: two-stage and PolyStep
+  (SPO+ not applicable, prediction sits in the forecast). Classification: reused-as-is for solver, data loader, and cost
+  model; predictor and PolyStep loop original by design. Paper-default phase-1 instance.
+
+\medskip\hrule\medskip
+
+\section*{Districting (DistrictNet)}
+
+Upstream: \texttt{https://github.com/cheikh025/DistrictNet} at HEAD \texttt{7a624a3}. The tree was compared against a fresh clone to
+extract the minimal real changes. The work splits into (i) a small set of edits to tracked upstream files, (ii) a new
+PolyStep estimator and train-at-scale driver, and (iii) a separate self-contained Python reimplementation that reuses
+only the DistrictNet data.
+
+\textbf{Tracked upstream-file edits (minimal, with reasons).}
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \texttt{experiment\_evaluator.jl}: adds \texttt{"polyStep"} to \texttt{solution\_types} and raises evaluation \texttt{NB\_SCENARIO} from 10 to 50.
+\item \texttt{experiments.jl}: includes and routes the new \texttt{polyStep} module through \texttt{find\_solution} / \texttt{find\_solution\_small}.
+\item \texttt{src/Estimators/\{AvgTsp,BD,FIG\}.jl}: solver \texttt{MAX\_TIME} reduced from 1200 s to 120 s (compute-budget change).
+\item \texttt{src/Estimators/predictGnn.jl}: \texttt{NB\_EPOCHS} 1000 to 40, \texttt{MAX\_TIME} 1200 to 120.
+\item \texttt{src/districtNet.jl}: \texttt{NB\_EPOCHS} 100 to 40 (env \texttt{DN\_EPOCHS}), \texttt{MAX\_TIME} 1200 to 120; adds a \texttt{DN\_UNTRAINED} random-GNN
+\end{itemize}
+  ablation branch and \texttt{[TIMING]} instrumentation accumulating build / load / exact-solve / feature times.
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \texttt{src/learning.jl}: per-epoch timing plus CMST set-partition solve counters (\texttt{SPO\_CALLS}, \texttt{SPO\_TIME}).
+\item \texttt{src/Solver/exactsolver.jl}: wraps \texttt{set\_partitioning\_optimizer} in a try/finally that increments \texttt{SPO\_CALLS} and
+\end{itemize}
+  accumulates \texttt{SPO\_TIME} (timing only, logic unchanged).
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \texttt{src/district.jl}: two robustness guards. (1) \texttt{compute\_cost\_via\_SAA} retries the C++ evaluator up to 6 times with
+\end{itemize}
+  backoff, because concurrent scenario-file regeneration across parallel jobs can let a read catch a mid-write JSON file.
+  (2) \texttt{compute\_cost\_via\_CMST} adds a disconnected-district guard: if \texttt{prim\_mst} returns fewer than n-1 edges the blocks
+  are not mutually reachable, so the district is penalized like a singleton instead of summing over an empty edge set
+  (which would throw).
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \texttt{src/Solver/Kruskal.jl}: +249 lines implementing \textbf{cascading chain-repair} for size feasibility. \texttt{repair\_districts}
+\end{itemize}
+  now escalates: plain grow/shrink, then constraint-aware cascade repair on both sides (grow an undersized orphan, or
+  shed an over-max district, by relocating one node along a BFS path of adjacent districts to or from a district with
+  spare capacity, keeping the FULL district count even under the 2*min > max no-split window), then a last-resort
+  \texttt{dissolve\_min\_districts} only if no reachable donor/receiver exists. A \texttt{DN\_NO\_REPAIR} env exposes the raw pre-repair
+  orphan for the before/after figures. This is the change that makes large instances (e.g. ilsdefrance) feasible.
+
+\textbf{New PolyStep estimator: \texttt{src/Estimators/polyStep.jl} (untracked, 375 lines).} A gradient-free,
+softmax-barycentric (optimal-transport-style) trainer that minimizes the REALIZED districting cost directly, with no
+imitation targets and no Fenchel-Young loss. It reuses the DistrictNet GNN architecture and forward pass
+(\texttt{STRATEGY = "districtNet"}, \texttt{build\_gnn\_model}, \texttt{predict\_theta}) and the existing CMST forward solver. Two variants:
+\texttt{GNNtrainer\_polyStep} (small 30-BU / target-3 instances, scored with the cached district costs, no C++ at train time)
+and \texttt{GNNtrainer\_polyStep\_atscale} (deploy-scale real cities, scored with the true C++ SAA evaluator and a memoized
+district-cost cache, with no labels and no exact set-partition at any point). An \texttt{PS\_SIZE\_PENALTY} env adds an explicit
+district-size penalty straight into the scalar objective (the An \#8 feasibility-aware variant), which the
+differentiable PerturbedAdditive(CMST) path cannot carry because PolyStep consumes only the scalar cost. The estimator
+also dumps a per-step replay JSON for visualization. Classification: original PolyStep estimator following the
+project's own method, reusing DistrictNet's GNN and CMST machinery.
+
+\textbf{New driver: \texttt{trainatscale\_driver.jl} (untracked, 159 lines).} Compares three deploy pipelines on held-out large
+real cities (Marseille / Birmingham fully held out, London / Leeds scaled up): DistrictNet trained small (FY label
+imitation), PolyStep trained small (realized cost), and PolyStep trained at scale (target-20, the new variant). Metric
+is the shared C++ SAA routing cost plus a feasibility check (full district count, no size violations), with each
+solution evaluated by the same module that produced it. Plus assorted \texttt{run\_dn\_*.sh} and \texttt{*\_driver.jl} shell/Julia
+drivers (city redeploy, "does data help" untrained-vs-trained, penalty training, raw-orphan capture, side-by-side
+feasibility, timing).
+
+\textbf{Python launcher: \texttt{districtnet\_polystep.py}.} A SEPARATE self-contained reimplementation that reuses only the
+DistrictNet data and its precomputed realized-cost cache (no Julia / C++ build): each city's \textasciitilde{}450 candidate districts
+carry a cached expected routing cost, a set-partition ILP is solved on predicted costs with Gurobi, and the TRUE cached
+cost is incurred. Trains a geometric-feature predictor with two-stage, SFGE, and PolyStep (pristine import).
+Classification: original implementation reusing the authors' data and cache, with a Gurobi set-partition solver.
+
+\textbf{Data.} The authors' real DistrictNet data is present: 211 geojson city blocks under \texttt{data/geojson/}, precomputed
+\texttt{data/tspCosts/} cost files, \texttt{data/cities}, \texttt{data/maps}, \texttt{data/maptiles}.
+
+\textbf{Paper-default caveat.} The DistrictNet runs deviate from the paper-default compute budget: solver / ILS \texttt{MAX\_TIME}
+was cut from 1200 s to 120 s across estimators, GNN epochs were reduced (predictGnn 1000 to 40, districtNet 100 to 40),
+and evaluation \texttt{NB\_SCENARIO} was set to 50 (the upstream evaluator default was 10). The model architectures, the FY
+training objective, the CMST forward solver, and the data are otherwise the authors' originals.
+
+\medskip\hrule\medskip
+
+\section*{Inventory routing (IRP)}
+
+Two distinct IRP threads exist: the "Toni" column from the authors' Julia DSIRP code, and the project's own Python
+predict to CPCTSP to simulate pipeline.
+
+\textbf{Toni / DSIRP authors' code} at \texttt{/media/anindex/Data/project-cache/ot-or-project/InferOpt\_DSIRP} (upstream
+\texttt{tonigreif/InferOpt\_DSIRP}). This is a copied cache, not a git checkout (no \texttt{.git}), so changes were located by reading
+the source directly.
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \texttt{src/sirp\_model.jl}: a \textbf{uniform-demand branch} was added. The uniform-10 instances ship no \texttt{mean\_demand}, so for
+\end{itemize}
+  \texttt{pattern == "uniform"} the start inventory is set to \texttt{0.75 * max\_inventory} (lines 181-184) and the sampling demand is
+  \texttt{Uniform(0, 0.5 * max\_inventory)} (lines 218-219), matching the authors' stated demand process. The normal, bimodal,
+  and contextual branches are unchanged.
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \texttt{src/auxiliar.jl}: the current \texttt{grb\_model} uses a single shared persistent \texttt{GRB\_ENV} and sets only \texttt{OutputFlag = 0}.
+\end{itemize}
+  No explicit Gurobi \texttt{Threads} attribute is present in the working copy; the previously noted Threads 1 to 8 change is
+  not observable here (it appears to have been reverted or never landed in this copy). This is reported as found.
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item Training uses the authors' pipeline at paper defaults: \texttt{train\_pipeline.jl} defaults are \texttt{paradigm = dagger},
+\end{itemize}
+  \texttt{pipeline\_epochs = 150}, \texttt{dagger\_iterations = 20}, \texttt{look\_ahead = 6}, \texttt{shortage\_penalty = 200}, \texttt{milp\_solver = gurobi},
+  with the 12-quantile statistical model and FYL defaults (5 samples, epsilon 20). The Toni column consumed by the
+  Python head-to-head is the authors' trained GLM weights, loaded unchanged into a dimension-matched predictor.
+
+\textbf{Project IRP scripts} (following Greif/Bouvier/Parmentier, arXiv:2402.04463).
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_irp\_polystep.py}.} Data: the authors' RELEASED instances loaded from JSON (the DSIRP \texttt{instances/} directory),
+\end{itemize}
+  parsed against the authors' schema. Solver: an ORIGINAL Python reimplementation, \texttt{cpctsp} is our own Gurobi MILP
+  mirroring \texttt{src/pctsp.jl}, the PINN predictor mirrors \texttt{src/stat\_model.jl}, and the rollout mirrors
+  \texttt{src/evaluation\_pipeline.jl}. Methods: a GLM-init PINN baseline (authors' init \texttt{w\_inv = -1/72}, \texttt{w\_pen = +1/72}) and
+  PolyStep (pristine, orthoplex, num\_probe 1). Paper-default constants carried explicitly: 12 quantiles, look-ahead 6,
+  shortage penalty 200, eval horizon 10. Classification: original-following-paper pipeline plus pristine PolyStep.
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{irp\_gpu.py}.} An ORIGINAL GPU-batched EXACT CPCTSP solver: exact Held-Karp DP precomputes the optimal tour length
+\end{itemize}
+  for every customer subset once per instance, then each CPCTSP is a batched membership-matmul + capacity-mask + argmax
+  over all subsets; exactness is self-verified against the gurobipy reference (\texttt{verify\_vs\_gurobi}). This is the \textasciitilde{}47x
+  speedup component. Classification: original, validated equal-objective to Gurobi.
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_irp\_headtohead.py}.} Reuses the authors' released instances and the authors' trained Toni GLM weights (loaded
+\end{itemize}
+  from the DSIRP cache \texttt{training/solutions/dagger/.../penalty\_200}), with \texttt{look\_ahead} forced to match the value the
+  weights were trained at. Four columns: untrained PINN, Toni-FY (authors' weights in our identical simulator), PolyStep
+  (pristine, GPU-batched closure), and SFGE (our score-function trainer over the rollout). Solvers: our Gurobi CPCTSP
+  for the eval path and our GPU-batched exact CPCTSP for training. Classification: original-following-paper harness that
+  reuses the authors' instances and trained weights as-is.
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{\_diag\_irp.py}.} A diagnostic over one fixed authors' instance and one Toni solutions JSON, printing untrained
+\end{itemize}
+  versus Toni-FY held-out cost. Reuses the \texttt{exp\_irp\_polystep} scaffold; no training, no PolyStep. Classification:
+  original diagnostic consuming authors' instance and weights as-is.
+
+\medskip\hrule\medskip
+
+\section*{Oracle-cost theory and scaling}
+
+These are original measurement and theory harnesses over the shared \texttt{pto/} problems (PyEPO data + PyEPO baselines +
+our GPU solvers + pristine PolyStep). No external authors' experiment code is reused.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_oracle\_crossover.py}.} Measures the wall-clock crossover between forward-only methods (PolyStep / SFGE,
+\end{itemize}
+  evaluation oracle) and SPO+ (optimization oracle), and validates the analytic cost-model quantities kappa, rho, and
+  the crossover latency. A \texttt{LatencyOracle} injects a controlled busy-wait into the identical SPO+(batched) algorithm so
+  the predicted crossover can be traced with byte-identical output (regret invariant). Problems: PyEPO TSP and knapsack.
+  SPO+ reused from \texttt{exp\_fair\_batched\_spo} (PyEPO algorithm). Classification: original cost-model theory harness.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_scaling.py}.} Wall-clock and regret versus problem scale on PyEPO TSP and knapsack, demonstrating the
+\end{itemize}
+  per-instance-exact-solve (SPO+) versus batched-forward (PolyStep / SFGE) asymmetry, with identical two-stage warm
+  start. SPO+ via the PyEPO wrapper. Classification: original scaling harness.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_scaling\_memory.py}.} Peak GPU memory and per-step wall-clock versus predictor parameter count, finding where
+\end{itemize}
+  SFGE (backprop activation graph) OOMs but PolyStep (forward-only, chunkable) survives. Uses its own minimal synthetic
+  top-k task rather than \texttt{pto/problems.py}. The real \texttt{PolyStepOptimizer} (pristine) and a real SFGE step are exercised,
+  with single-chunk peak estimates validated against an actual \texttt{pso.step}. Classification: original memory-measurement
+  harness (MeZO-style).
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{\texttt{exp\_config\_sweep.py}.} Normalized regret and wall-clock across the PolyStep config grid (polytope x num\_probe x
+\end{itemize}
+  seeds) over both PyEPO problems and the constraint-prediction families (\texttt{MDKPConsumption}, \texttt{KnapsackWeights}), to
+  derive the recommended default polytope and probe count. PolyStep only, pristine, warm-started from two-stage.
+  Classification: original config-robustness harness.
+
+\medskip\hrule\medskip
+
+\section*{Compact per-experiment table}
+
+{\footnotesize\begin{longtable}{p{0.16\textwidth}p{0.18\textwidth}p{0.13\textwidth}p{0.30\textwidth}p{0.11\textwidth}}
+\toprule
+\textbf{Experiment} & \textbf{Upstream source} & \textbf{Reuse class} & \textbf{Key local changes} & \textbf{Paper-default config?} \\ \midrule \endhead
+challenge\_established.py & PyEPO (data, models, SPO+/PFYL/IMLE) & reused-as-is + original SFGE & shared two-stage warm start; PolyStep pristine & Yes (PyEPO defaults) \\
+exp\_fair\_batched\_spo.py & PyEPO SPO+ & reused-as-is + adapted backend & batched SPO+ twin mirroring SPOPlusFunc, checked vs Gurobi & Yes \\
+exp\_polystep\_vs\_sfge.py & PyEPO SP/knapsack & reused-as-is + original SFGE & per-method tuned HPs from prior sweep & Yes (PyEPO defaults) \\
+exp\_polystep\_bench.py & PyEPO four problems + full DFL suite & reused-as-is & PolyStep HPs from tune JSON; Wilcoxon & Yes \\
+exp\_polystep\_tune.py & PyEPO setups & reused-as-is (PolyStep utility) & tuning grid only & N/A (tuning) \\
+exp\_polystep\_ablation.py & PyEPO setups & reused-as-is (PolyStep utility) & polytope x probe sweep & N/A (ablation) \\
+exp\_sfge\_suite.py & SFGE paper (Silvestri JAIR'24) & original-following-paper & own solvers (frac-knapsack, set-multicover) vs cvxpy/Gurobi & Follows paper setup \\
+exp\_spo\_convergence.py & PyEPO SPO+ & reused-as-is + original SFGE & epoch-grid convergence sweep & Yes \\
+cross\_sfge.py & PyEPO problems + SPO+ & reused-as-is + original SFGE & all warm-started from two-stage & Yes \\
+fair\_init.py & PyEPO knapsack + SPO+ & reused-as-is (control) & cold-vs-warm init integrity check & Yes \\
+blackbox\_constraint.py & PyEPO knapsack generator & original-following-paper & prediction-in-constraint variant; our DP solver & PyEPO defaults \\
+exp\_constraint\_complexity.py & none (own synthetic) & original & L0-L4 ladder; greedy solver Gurobi-verified & N/A (original) \\
+exp\_constraint\_scaling.py & own MDKP synth + PyEPO contrast & original + reused-as-is & MDKPConsumption regime + PyEPO SPO+ contrast & PyEPO contrast at defaults \\
+exp\_manyconstraints.py & PyEPO SP + own MDKP & adapted + original & two regimes; solve/Gurobi accounting & PyEPO SP at defaults \\
+exp\_odece\_full.py & ODECE generators + Results/ & adapted & ODECE generator reused; ODECE solver/loss NOT run; numbers cited & Yes (ODECE scripts) \\
+exp\_odece\_mdkp.py & ODECE genCapacity & adapted & ODECE generator reused; our greedy solver + Gurobi oracle & Yes (MDKP\_CapaExp.sh) \\
+exp\_maxflow\_polska.py & cpaior23 B\&L POLSKA files & adapted & topology from file; corrA ported; batched solver ours & Follows B\&L setup \\
+exp\_mcvc\_abilene.py & cpaior23 B\&L ABILENE files & adapted & data + objective from file; exact 2\textasciicircum{}12 solver ours & Follows B\&L setup \\
+interpretable\_predictor.py & PyEPO problems & original-impl & custom HardTree + CART refined by PolyStep (not sklearn) & PyEPO defaults \\
+exp\_spotree\_polystep.py & SPOTree (ICML'20) code + data & reused-as-is & authors' SPOTree/CART + Gurobi SP; PolyStep refines thresholds & Yes (ICML'20 default) \\
+exp\_warcraft.py & Vlastelica Warcraft data & original-following-paper & dataset authors'; solver+CNN reimplemented, validated vs optima & Yes (12x12 defaults) \\
+exp\_tsp\_embed.py & blackbox-backprop TSP solver + Globe-TSP data & reused-as-is & vendored gurobi\_tsp/TspSolver; one documented bug-fix & Yes \\
+exp\_matching\_embed.py & Blossom V + MNIST process & reused-as-is solver, original data & Blossom vendored; dataset regenerated (dead URL) & Follows paper cost \\
+exp\_amazon\_polystep.py & AWS ALMRRC router + rc-cli scorer & reused-as-is & OR-tools router + official scorer verbatim; ZoneNet MLP added; data absent on disk & Yes (official protocol) \\
+exp\_icon\_polystep.py & predopt-benchmarks ICON & reused-as-is & SolveICON + all baselines verbatim; PolyStep added & Yes (550/100/142) \\
+exp\_ieee\_polystep.py & MA\&RE optimiser + IEEE-CIS data & reused-as-is & Gurobi MILP + loaders verbatim; calendar predictor + PolyStep & Yes (phase-1) \\
+districtnet\_polystep.py & DistrictNet data + cache & original-impl reusing data & Gurobi set-partition ILP; two-stage/SFGE/PolyStep on geometric features & Reuses authors' data \\
+DistrictNet/*.jl drivers & cheikh025/DistrictNet & adapted & new polyStep.jl estimator; cascade chain-repair; train-at-scale driver; timing & Budgets reduced (see caveat) \\
+exp\_irp\_headtohead.py & DSIRP instances + Toni weights & original-following-paper harness & authors' instances + trained weights reused; our Gurobi/GPU CPCTSP & Yes (look-ahead, penalty 200) \\
+exp\_irp\_polystep.py & DSIRP instances & original-following-paper & Python port of predict->CPCTSP->simulate; pristine PolyStep & Yes (12 quantiles, LA 6) \\
+irp\_gpu.py & none (own solver) & original & GPU-batched exact CPCTSP, validated vs Gurobi & N/A (accelerator) \\
+\_diag\_irp.py & DSIRP instance + Toni weights & original diagnostic & sanity-check of loaded weights & Inherits IRP constants \\
+exp\_oracle\_crossover.py & pto harness (PyEPO) & original & cost-model theory + latency oracle & N/A (own theory) \\
+exp\_scaling.py & pto harness (PyEPO) & original & wall-clock/regret vs scale & N/A \\
+exp\_scaling\_memory.py & none (own task) & original & memory crossover; own top-k task & N/A \\
+exp\_config\_sweep.py & pto harness (PyEPO + own MDKP) & original & polytope/probe robustness sweep & N/A (derives default) \\
+\bottomrule\end{longtable}}
+
+\medskip\hrule\medskip
+
+\section*{Notes and items flagged}
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{DSIRP Gurobi Threads change not observed.} The brief named a Threads 1 to 8 edit in
+\end{itemize}
+  \texttt{InferOpt\_DSIRP/src/auxiliar.jl}; the current working copy of \texttt{grb\_model} sets only \texttt{OutputFlag = 0} on a shared
+  persistent environment, with no Threads attribute anywhere in the repo. Only the uniform-demand branch in
+  \texttt{sirp\_model.jl} is confirmed as a local change. Reported as found.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{DistrictNet compute budgets} were reduced below paper defaults (MAX\_TIME 1200 to 120 s, epochs cut, eval
+\end{itemize}
+  NB\_SCENARIO 10 to 50). The architectures, FY objective, CMST solver, and data are the authors' originals. This is the
+  one place where the runs depart from the strict paper-default-config requirement, and it is a budget choice rather
+  than a method change.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{Two named benchmarks depart from strict author-solver reuse, both documented and validated:} Warcraft (solver and
+\end{itemize}
+  CNN reimplemented from the paper, validated against the authors' stored optimal masks) and MNIST matching (dataset
+  regenerated from the paper's process because the authors' file is dead and label-incomplete, with the Blossom V solver
+  still vendored).
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{One dataset is currently missing from disk:} the Amazon ALMRRC challenge data expected at \texttt{data/amazon\_lmrrc/} is
+\end{itemize}
+  absent (only the earlier result JSON remains), so that experiment needs the dataset re-fetched to reproduce. The
+  solver, scorer, and code path are all present and reused verbatim.
+
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item Every experiment was classifiable; none was left unclassified.
+\end{itemize}
+
+\end{document}

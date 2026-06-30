@@ -1,0 +1,18 @@
+# Ignore objects and archives, anywhere in the tree.
+*.png
+*.pdf
+*.jdl2
+*.bson
+*.out
+*.pyc
+*.tex
+# Ignore changes to files in these folders
+.vscode/
+models/
+deps/Evaluator/build/
+deps/BCext/build/
+deps/Scenario/build/
+deps/Scenario/output/
+deps/LKH/build/
+output/plots/
+output/csv/

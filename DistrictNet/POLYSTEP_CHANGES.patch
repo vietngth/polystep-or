@@ -1,0 +1,591 @@
+--- /tmp/claude-1000/-media-anindex-Data-ot-or-project/eb8c8aab-4d2e-4e9a-9f32-d20c96478c25/scratchpad/fresh_DistrictNet/experiment_evaluator.jl	2026-06-30 21:05:07.666766776 +0200
++++ experiment_evaluator.jl	2026-06-30 21:08:12.591772000 +0200
+@@ -20,12 +20,12 @@
+ 
+ const CITIES = ["London", "Leeds", "Bristol", "Manchester", "Paris", "Lyon", "Marseille"]
+ const DISTRICT_SIZES = [3, 6, 12, 20, 30]
+-solution_types = ["districtNet", "predictGnn", "BD", "FIG", "AvgTSP"]
++solution_types = ["districtNet", "predictGnn", "BD", "FIG", "AvgTSP", "polyStep"]
+ 
+ 
+ const NB_BU_LARGE = 120
+ const DEPOT_LOCATION = "C"
+-const NB_SCENARIO = 10
++const NB_SCENARIO = 50
+ """
+     readSolution(solution_path)
+ 
+--- /tmp/claude-1000/-media-anindex-Data-ot-or-project/eb8c8aab-4d2e-4e9a-9f32-d20c96478c25/scratchpad/fresh_DistrictNet/experiments.jl	2026-06-30 21:05:07.666766776 +0200
++++ experiments.jl	2026-06-30 21:08:12.594772100 +0200
+@@ -3,12 +3,14 @@
+ include("src/Estimators/predictGnn.jl")
+ include("src/Estimators/AvgTsp.jl")
+ include("src/districtNet.jl")
++include("src/Estimators/polyStep.jl")
+ 
+ using .BD
+ using .FIG
+ using .predictGnn
+ using .districtNet
+ using .AvgTSP
++using .polyStep
+ using Statistics
+ 
+ """
+@@ -108,7 +110,7 @@
+     modelModule,
+     training_result,
+ )
+-    if modelModule == districtNet || modelModule == predictGnn
++    if modelModule == districtNet || modelModule == predictGnn || modelModule == polyStep
+         return modelModule.find_solution_city(
+             city,
+             district_size,
+@@ -143,7 +145,7 @@
+ """
+ 
+ function find_solution_small(city::String, district_size::Int, modelModule, training_result)
+-    if modelModule == districtNet|| modelModule == predictGnn
++    if modelModule == districtNet|| modelModule == predictGnn || modelModule == polyStep
+         return modelModule.find_solution_small_city(city, district_size, training_result...)
+     else
+         return modelModule.find_solution_small_city(city, district_size, training_result)
+--- /tmp/claude-1000/-media-anindex-Data-ot-or-project/eb8c8aab-4d2e-4e9a-9f32-d20c96478c25/scratchpad/fresh_DistrictNet/src/Estimators/AvgTsp.jl	2026-06-30 21:05:07.667321245 +0200
++++ src/Estimators/AvgTsp.jl	2026-06-30 21:08:12.598772300 +0200
+@@ -34,7 +34,7 @@
+ const NB_SCENARIO = 1
+ 
+ # Solver Hyperparameters
+-const MAX_TIME = 1200
++const MAX_TIME = 120
+ const PERTURBATION_PROBABILITY = 0.985
+ const PENALITY = 10000
+ 
+--- /tmp/claude-1000/-media-anindex-Data-ot-or-project/eb8c8aab-4d2e-4e9a-9f32-d20c96478c25/scratchpad/fresh_DistrictNet/src/Estimators/BD.jl	2026-06-30 21:05:07.667407384 +0200
++++ src/Estimators/BD.jl	2026-06-30 21:08:12.601772400 +0200
+@@ -32,7 +32,7 @@
+ const NB_SCENARIO = 100
+ 
+ # Solver Hyperparameters
+-const MAX_TIME = 1200
++const MAX_TIME = 120
+ const PERTURBATION_PROBABILITY = 0.985
+ const PENALITY = 10000
+ 
+--- /tmp/claude-1000/-media-anindex-Data-ot-or-project/eb8c8aab-4d2e-4e9a-9f32-d20c96478c25/scratchpad/fresh_DistrictNet/src/Estimators/FIG.jl	2026-06-30 21:05:07.667407384 +0200
++++ src/Estimators/FIG.jl	2026-06-30 21:08:12.604772500 +0200
+@@ -33,7 +33,7 @@
+ 
+ 
+ # Solver Hyperparameters
+-const MAX_TIME = 1200
++const MAX_TIME = 120
+ const PERTURBATION_PROBABILITY = 0.985
+ const PENALITY = 10000
+ 
+--- /tmp/claude-1000/-media-anindex-Data-ot-or-project/eb8c8aab-4d2e-4e9a-9f32-d20c96478c25/scratchpad/fresh_DistrictNet/src/Estimators/predictGnn.jl	2026-06-30 21:05:07.667407384 +0200
++++ src/Estimators/predictGnn.jl	2026-06-30 21:08:12.607772600 +0200
+@@ -36,11 +36,11 @@
+ const BATCH_SIZE = 64
+ const HIDDEN_SIZE = 64
+ const INITIAL_LR = 0.0001
+-const NB_EPOCHS = 1000
++const NB_EPOCHS = 40
+ const SIGNIFICANT_LOSS_CHANGE_THRESHOLD = 0.0001
+ 
+ # Solver Hyperparameters
+-const MAX_TIME = 1200
++const MAX_TIME = 120
+ const PERTURBATION_PROBABILITY = 0.985
+ const PENALITY = 10000
+ 
+--- /tmp/claude-1000/-media-anindex-Data-ot-or-project/eb8c8aab-4d2e-4e9a-9f32-d20c96478c25/scratchpad/fresh_DistrictNet/src/Solver/Kruskal.jl	2026-06-30 21:05:07.667766814 +0200
++++ src/Solver/Kruskal.jl	2026-06-30 21:08:12.610772700 +0200
+@@ -352,6 +352,80 @@
+ end
+ 
+ """
++    is_node_adjacent_to_district(instance::Instance, node::Int, dnodes::Vector{Int})
++
++True if `node` shares a graph edge with any block in district `dnodes` (depot excluded by construction).
++"""
++function is_node_adjacent_to_district(instance::Instance, node::Int, dnodes::Vector{Int})
++    for nb in neighbors(instance.graph, node)
++        if nb in dnodes
++            return true
++        end
++    end
++    return false
++end
++
++"""
++    dissolve_district!(instance::Instance, districts::Vector{Vector{Int}}, i::Int)
++
++Empties an undersized district `i` by reassigning each of its blocks into a connected neighbouring
++district that still has spare capacity (`size < max_district_size`). Peeling boundary blocks first
++keeps every receiving district connected. Returns `true` if district `i` was fully emptied.
++"""
++function dissolve_district!(instance::Instance, districts::Vector{Vector{Int}}, i::Int)
++    progress = true
++    while !isempty(districts[i]) && progress
++        progress = false
++        neighborPairs = findNeighborDistricts(instance, districts)
++        nbr_ids = sort(find_id_neighbors(i, neighborPairs), by = x -> length(districts[x]))
++        for node in copy(districts[i])
++            placed = false
++            for j in nbr_ids
++                j == i && continue
++                length(districts[j]) >= instance.max_district_size && continue
++                if is_node_adjacent_to_district(instance, node, districts[j])
++                    push!(districts[j], node)
++                    districts[i] = setdiff(districts[i], [node])
++                    placed = true
++                    progress = true
++                    break
++                end
++            end
++            placed && break   # neighbour sizes changed -> recompute before next move
++        end
++    end
++    return isempty(districts[i])
++end
++
++"""
++    dissolve_min_districts(instance::Instance, districts::Vector{Vector{Int}})
++
++Last-resort repair for orphan (undersized) districts that grow/shrink cannot fix — e.g. when
++`2*min_district_size > max_district_size` makes merging two undersized districts impossible. Each
++orphan is dissolved into connected neighbours with room, reducing the district count by one. Empty
++districts are dropped. Terminates when no remaining orphan can be dissolved.
++"""
++function dissolve_min_districts(instance::Instance, districts::Vector{Vector{Int}})
++    districts = filter(d -> !isempty(d), districts)
++    changed = true
++    while changed
++        changed = false
++        order = sort(collect(1:length(districts)), by = x -> length(districts[x]))
++        for i in order
++            i > length(districts) && continue
++            if length(districts[i]) < instance.min_district_size
++                if dissolve_district!(instance, districts, i)
++                    districts = filter(d -> !isempty(d), districts)
++                    changed = true
++                    break
++                end
++            end
++        end
++    end
++    return districts
++end
++
++"""
+     repair_districts(instance::Instance, districts::Vector{Vector{Int}})
+ 
+ Repairs districting solutions that do not respect the district size constraints. It adjusts districts to meet both minimum and maximum size requirements.
+@@ -364,15 +438,190 @@
+ - The repaired list of districts.
+ """
+ 
++# --- Cascading chain-repair (constraint-aware): grow an undersized "orphan" district up to the
++# minimum size WITHOUT dropping a district, by relocating one node along a path of adjacent
++# districts from an oversized donor (size > min) down to the orphan. Each intermediate district
++# gives one node and receives one (net zero, stays valid); only the donor loses one (still >= min).
++# This fixes orphans even under the no-split window (2*min > max), where merging two undersized
++# districts is impossible, so the deployed solution keeps the FULL target district count instead of
++# being dissolved to count-1. ---
++
++function _district_adjacency(instance::Instance, districts::Vector{Vector{Int}})
++    nd = length(districts)
++    adj = [Int[] for _ = 1:nd]
++    neighborPairs = findNeighborDistricts(instance, districts)
++    for (pair, _) in neighborPairs
++        push!(adj[pair[1]], pair[2])
++        push!(adj[pair[2]], pair[1])
++    end
++    return adj
++end
++
++# Move one boundary node from district `from` into adjacent district `to`, keeping `from` connected.
++function _move_boundary_node!(instance::Instance, districts::Vector{Vector{Int}}, from::Int, to::Int)
++    to_boundary = get_nodes_neighbor(instance, districts, to)   # nodes adjacent to district `to`
++    for node in districts[from]
++        if node in to_boundary
++            sub, _ = induced_subgraph(instance.graph, setdiff(districts[from], [node]))
++            if is_connected(sub)
++                districts[from] = setdiff(districts[from], [node])
++                push!(districts[to], node)
++                return true
++            end
++        end
++    end
++    return false
++end
++
++# Grow `orphan` by one net node: BFS over the district-adjacency graph to the nearest donor with
++# spare capacity (size > min), then cascade one node back along that path to the orphan.
++function _cascade_grow_once!(instance::Instance, districts::Vector{Vector{Int}}, orphan::Int)
++    adj = _district_adjacency(instance, districts)
++    nd = length(districts)
++    parent = fill(0, nd)
++    visited = falses(nd)
++    visited[orphan] = true
++    queue = [orphan]
++    donor = 0
++    while !isempty(queue)
++        u = popfirst!(queue)
++        if u != orphan && length(districts[u]) > instance.min_district_size
++            donor = u
++            break
++        end
++        for v in adj[u]
++            if !visited[v]
++                visited[v] = true
++                parent[v] = u
++                push!(queue, v)
++            end
++        end
++    end
++    donor == 0 && return false                      # no reachable district with spare capacity
++    path = Int[]                                     # donor -> ... -> orphan (via parent pointers)
++    cur = donor
++    while cur != 0
++        push!(path, cur)
++        cur = parent[cur]
++    end
++    for j = 1:(length(path) - 1)                     # relocate one node down the path toward orphan
++        _move_boundary_node!(instance, districts, path[j], path[j + 1]) || return false
++    end
++    return true
++end
++
++# Repair all undersized districts via cascading chain moves (preserves district count).
++function repair_min_districts_cascade(instance::Instance, districts::Vector{Vector{Int}})
++    MAX_PASSES = 100 * length(districts)
++    passes = 0
++    changed = true
++    while changed && passes < MAX_PASSES
++        changed = false
++        for i = 1:length(districts)
++            while length(districts[i]) < instance.min_district_size && passes < MAX_PASSES
++                _cascade_grow_once!(instance, districts, i) || break
++                changed = true
++                passes += 1
++            end
++        end
++    end
++    return districts
++end
++
++
++# Mirror for the MAX side: shed one node from an over-max district along a path to the nearest
++# district with spare room (size < max). Fixes over-max districts whose immediate neighbours are all
++# at the ceiling, where plain repair_max_districts stalls.
++function _cascade_shrink_once!(instance::Instance, districts::Vector{Vector{Int}}, over::Int)
++    adj = _district_adjacency(instance, districts)
++    nd = length(districts)
++    parent = fill(0, nd)
++    visited = falses(nd)
++    visited[over] = true
++    queue = [over]
++    receiver = 0
++    while !isempty(queue)
++        u = popfirst!(queue)
++        if u != over && length(districts[u]) < instance.max_district_size
++            receiver = u
++            break
++        end
++        for v in adj[u]
++            if !visited[v]
++                visited[v] = true
++                parent[v] = u
++                push!(queue, v)
++            end
++        end
++    end
++    receiver == 0 && return false                    # no reachable district with spare room
++    path = Int[]                                      # receiver -> ... -> over (via parent pointers)
++    cur = receiver
++    while cur != 0
++        push!(path, cur)
++        cur = parent[cur]
++    end
++    for j = length(path):-1:2                         # relocate one node from over toward receiver
++        _move_boundary_node!(instance, districts, path[j], path[j - 1]) || return false
++    end
++    return true
++end
++
++function repair_max_districts_cascade(instance::Instance, districts::Vector{Vector{Int}})
++    MAX_PASSES = 100 * length(districts)
++    passes = 0
++    changed = true
++    while changed && passes < MAX_PASSES
++        changed = false
++        for i = 1:length(districts)
++            while length(districts[i]) > instance.max_district_size && passes < MAX_PASSES
++                _cascade_shrink_once!(instance, districts, i) || break
++                changed = true
++                passes += 1
++            end
++        end
++    end
++    return districts
++end
++
++
++"""
++    repair_districts(instance::Instance, districts::Vector{Vector{Int}})
++
++Repairs districting solutions that do not respect the size constraints, in escalating stages: plain
++grow/shrink, then constraint-aware cascading chain-repair on BOTH sides (grow undersized / shed
++oversized by relocating nodes along a path to a district with spare capacity, keeping the full
++district count and working under the 2*min>max no-split window), then last-resort dissolve only if a
++violation has no reachable donor/receiver.
++"""
+ function repair_districts(instance::Instance, districts::Vector{Vector{Int}})
++    get(ENV, "DN_NO_REPAIR", "0") == "1" && return districts   # [FIG] expose the raw (pre-repair) orphan
+     MAX_ITER = 10
+     iter = 1
+     is_valid_solution = is_valid_districting_solution(instance, districts)
+     while !is_valid_solution && iter <= MAX_ITER
+         districts = repair_max_districts(instance, districts)
+         districts = repair_min_districts(instance, districts)
++        is_valid_solution = is_valid_districting_solution(instance, districts)
+         iter += 1
+     end
++    # Constraint-aware cascading chain-repair (both sides): grow undersized and shed oversized
++    # districts by relocating nodes along a path to/from a district with spare capacity, keeping the
++    # FULL district count even under the 2*min>max no-split window where plain grow/shrink stalls.
++    cpass = 0
++    while !is_valid_districting_solution(instance, districts) && cpass < 3
++        districts = repair_min_districts_cascade(instance, districts)
++        districts = repair_max_districts_cascade(instance, districts)
++        districts = repair_max_districts(instance, districts)
++        districts = repair_min_districts(instance, districts)
++        cpass += 1
++    end
++    # Last resort: dissolve an orphan into neighbours (drops a district) only if the cascades cannot
++    # fix it (no reachable donor/receiver). Should now rarely trigger.
++    if !is_valid_districting_solution(instance, districts)
++        districts = dissolve_min_districts(instance, districts)
++        districts = repair_max_districts(instance, districts)
++    end
+     return districts
+ end
+ 
+--- /tmp/claude-1000/-media-anindex-Data-ot-or-project/eb8c8aab-4d2e-4e9a-9f32-d20c96478c25/scratchpad/fresh_DistrictNet/src/Solver/exactsolver.jl	2026-06-30 21:05:07.667871473 +0200
++++ src/Solver/exactsolver.jl	2026-06-30 21:08:12.615772900 +0200
+@@ -98,24 +98,34 @@
+ - The solution of the optimization problem as a binary array.
+ """
+ 
++# [TIMING] CMST = exact set-partitioning ILP (GLPK) over pre-enumerated subgraphs. Counters let the
++# trainers report total CMST solves / time / avg (reset via SPO_CALLS[]=0; SPO_TIME[]=0.0).
++const SPO_CALLS = Ref(0)
++const SPO_TIME = Ref(0.0)
+ function set_partitioning_optimizer(node_matrix, mst_costs, num_vertices, num_subgraphs)
+-    model = Model(GLPK.Optimizer)
+-    @variable(model, y[1:size(node_matrix, 1)], Bin)
+-    @objective(model, Min, sum(mst_costs[i] * y[i] for i = 1:size(node_matrix, 1)))
++    SPO_CALLS[] += 1
++    _t0 = time()
++    try
++        model = Model(GLPK.Optimizer)
++        @variable(model, y[1:size(node_matrix, 1)], Bin)
++        @objective(model, Min, sum(mst_costs[i] * y[i] for i = 1:size(node_matrix, 1)))
+ 
+-    for j = 1:num_vertices
+-        @constraint(
+-            model,
+-            sum(node_matrix[i, j] * y[i] for i = 1:size(node_matrix, 1)) == 1
+-        )
+-    end
+-    @constraint(model, sum(y) == num_subgraphs)
+-    optimize!(model)
++        for j = 1:num_vertices
++            @constraint(
++                model,
++                sum(node_matrix[i, j] * y[i] for i = 1:size(node_matrix, 1)) == 1
++            )
++        end
++        @constraint(model, sum(y) == num_subgraphs)
++        optimize!(model)
+ 
+-    if termination_status(model) == MOI.OPTIMAL
+-        return value.(y)
+-    else
+-        return 0
++        if termination_status(model) == MOI.OPTIMAL
++            return value.(y)
++        else
++            return 0
++        end
++    finally
++        SPO_TIME[] += time() - _t0
+     end
+ end
+ 
+--- /tmp/claude-1000/-media-anindex-Data-ot-or-project/eb8c8aab-4d2e-4e9a-9f32-d20c96478c25/scratchpad/fresh_DistrictNet/src/district.jl	2026-06-30 21:05:07.667871473 +0200
++++ src/district.jl	2026-06-30 21:08:12.619773100 +0200
+@@ -67,7 +67,19 @@
+     nodes = nodes .- 1
+     formatted_nodes = "{" * join(nodes, ", ") * "}"
+     target = string( instance.city_name, "_", instance.depot, "_", instance.num_blocks, "_", instance.target_district_size, "_", NB_SCENARIO)
+-    return EVmain(formatted_nodes, target)
++    # The C++ SAA evaluator reads the scenario JSON; under concurrent scenario (re)generation across
++    # parallel jobs a read can catch a truncated mid-write file and throw a JSON parse error. Retry with
++    # backoff so a transient write/read race does not kill a multi-hour run; rethrow if it never settles.
++    local err
++    for attempt in 1:6
++        try
++            return EVmain(formatted_nodes, target)
++        catch e
++            err = e
++            sleep(2.0 * attempt)
++        end
++    end
++    rethrow(err)
+ end
+ 
+ """
+@@ -89,7 +101,14 @@
+         return PENALITY * instance.max_district_size
+     end
+     sub_graph, _ = induced_subgraph(instance.graph, nodes)
+-    cost = sum(get_prop(sub_graph, edge, :weight) for edge in prim_mst(sub_graph))
++    mst_edges = prim_mst(sub_graph)
++    if length(mst_edges) < length(nodes) - 1
++        # disconnected district: the selected BUs are not mutually reachable in the base graph,
++        # so prim_mst yields a partial/empty forest (< n-1 edges). Such a district is infeasible;
++        # penalize it like a singleton instead of summing over an empty edge set (which throws).
++        return PENALITY * instance.max_district_size
++    end
++    cost = sum(get_prop(sub_graph, edge, :weight) for edge in mst_edges)
+     ls, us = instance.min_district_size, instance.max_district_size
+     cost += PENALITY * max(0, length(district.nodes) - us, ls - length(district.nodes))
+     return cost + compute_depot_cost(instance, nodes)
+--- /tmp/claude-1000/-media-anindex-Data-ot-or-project/eb8c8aab-4d2e-4e9a-9f32-d20c96478c25/scratchpad/fresh_DistrictNet/src/districtNet.jl	2026-06-30 21:05:07.667871473 +0200
++++ src/districtNet.jl	2026-06-30 21:08:12.624773300 +0200
+@@ -38,11 +38,11 @@
+ const EPSILON = 1.0
+ const WEIGHT_DECAY = 0.0
+ const INITIAL_LR = 0.001
+-const NB_EPOCHS = 100
++const NB_EPOCHS = parse(Int, get(ENV, "DN_EPOCHS", "40"))   # override for timing runs (e.g. DN_EPOCHS=5)
+ const MC_SAMPLES = 20
+ 
+ # Solver Hyperparameters
+-const MAX_TIME = 1200
++const MAX_TIME = 120
+ const PERTURBATION_PROBABILITY = 0.985
+ const PENALITY = 10000
+ # Helper functions
+@@ -96,22 +96,27 @@
+     TARGET_DISTRICT_SIZE = 3
+     data_train = []
+     cities = ["city" * string(i) for i = start:nb_data+start-1]
++    t_inst = 0.0; t_cost = 0.0; t_exact = 0.0; t_feat = 0.0   # [TIMING] per-component accumulators
+     for CITY in cities
+-        instance = build_instance(CITY, NB_BU_SMALL, TARGET_DISTRICT_SIZE, DEPOT_LOCATION)
++        local instance, costloader, solution, unique_subgraphs
++        t_inst += @elapsed (instance = build_instance(CITY, NB_BU_SMALL, TARGET_DISTRICT_SIZE, DEPOT_LOCATION))
+         W = W = rand(ne(instance.graph))
+         update_edge_weights!(instance.graph, W)
+         path = string("data/tspCosts/", CITY, "_", DEPOT_LOCATION, "_", NB_BU_SMALL, "_", TARGET_DISTRICT_SIZE, "_tsp.train_and_test.json")
+-        costloader = load_precomputed_costs(path)
+-        solution, unique_subgraphs = districting_exact_solver(instance, costloader)
++        t_cost += @elapsed (costloader = load_precomputed_costs(path))
++        t_exact += @elapsed ((solution, unique_subgraphs) = districting_exact_solver(instance, costloader))
+         if (solution == nothing)
+             continue
+         end
+         cost = solution.cost
++        tf = @elapsed begin
+         y = randomized_constructor(solution, MC_SAMPLES)
+         g = deepcopy(instance.graph)
+         edges_data = extract_edge_feature(g)
+         data = hcat(edges_data...)
+         gnn_graph = create_edge_graph(g, data)
++        end
++        t_feat += tf
+         push!(
+             data_train,
+             (
+@@ -128,6 +133,7 @@
+             ),
+         )
+     end
++    println("[TIMING]   aggregate breakdown: build_instance=$(round(t_inst,digits=2))s  load_TSP_costs=$(round(t_cost,digits=2))s  exact_districting_solver=$(round(t_exact,digits=2))s  features=$(round(t_feat,digits=2))s")
+     return data_train
+ end
+ 
+@@ -145,7 +151,9 @@
+ 
+ function fitGeneralModel(nb_data)
+     TARGET_DISTRICT_SIZE = 3
+-    data_train = aggregateCityTrainingData(nb_data)
++    println("[TIMING] === DistrictNet fitGeneralModel(nb_data=$(nb_data)) ===")
++    t_agg = @elapsed (data_train = aggregateCityTrainingData(nb_data))
++    println("[TIMING] STAGE data-aggregation TOTAL = $(round(t_agg, digits=2)) s")
+     data_train, data_test = splitobs(shuffleobs(data_train), at = 1.0)
+     println("Training data size: ", length(data_train))
+     data_train, mean_train, std_train = normalize_features(data_train)
+@@ -160,6 +168,12 @@
+         NB_EPOCHS,
+         MC_SAMPLES,
+     )
++    if get(ENV, "DN_UNTRAINED", "0") == "1"   # [ABLATION] random GNN, no load/train (data-learns-something baseline)
++        Random.seed!(parse(Int, get(ENV, "DN_SEED", "1234")))
++        model = build_gnn_model(data_train[1][1].instance.graph, STRATEGY, HIDDEN_SIZE)
++        println("[ABLATION] UNTRAINED random GNN (districtNet), seed=", get(ENV, "DN_SEED", "1234"))
++        return model, mean_train, std_train
++    end
+     model_name = "models/GeneralDistrictNet_$(nb_data).jld2"
+     if isfile(model_name)
+         @info "Loading model from file"
+@@ -169,7 +183,8 @@
+         return model, mean_train, std_train
+     end
+     model = build_gnn_model(data_train[1][1].instance.graph, STRATEGY, HIDDEN_SIZE)
+-    model = train_GNN(STRATEGY, model, data_train, data_test, hyperparams)
++    t_train = @elapsed (model = train_GNN(STRATEGY, model, data_train, data_test, hyperparams))
++    println("[TIMING] STAGE GNN-training TOTAL = $(round(t_train, digits=2)) s")
+     model_state = Flux.state(model)
+     if !isdir("models")
+         mkpath("models")
+--- /tmp/claude-1000/-media-anindex-Data-ot-or-project/eb8c8aab-4d2e-4e9a-9f32-d20c96478c25/scratchpad/fresh_DistrictNet/src/learning.jl	2026-06-30 21:05:07.667871473 +0200
++++ src/learning.jl	2026-06-30 21:08:12.628773400 +0200
+@@ -107,8 +107,9 @@
+     # DataLoader and optimizer
+     opt = Flux.Optimise.ADAM(initial_lr)
+     LinearAlgebra.BLAS.set_num_threads(10)
++    SPO_CALLS[] = 0; SPO_TIME[] = 0.0   # [TIMING] count CMST set-partition solves during training
+     for epoch in 1:nb_epochs
+-
++        ep_start = time()                                       # [TIMING] per-epoch (FY + PerturbedAdditive CMST sampling)
+         Flux.trainmode!(model, true)
+         opt.eta = decayed_learning_rate(epoch, initial_lr)
+         # Training
+@@ -118,18 +119,20 @@
+             grads = gradient(Flux.params(model)) do
+                 batch_loss  = flux_loss_batch(batch)
+             end
+-            train_loss += batch_loss 
++            train_loss += batch_loss
+             Flux.update!(opt, Flux.params(model), grads)
+         end
+ 
+         # Normalize training loss and track
+         train_loss /= length(data_train)
+-        println("Epoch $epoch: train loss = $train_loss")
++        println("Epoch $epoch: train loss = $train_loss  [TIMING] epoch_time = $(round(time()-ep_start, digits=2)) s")
+         push!(training_losses, train_loss)
+     end
+     end_time = time()
+ 
+     @info "Training done in $(end_time - start_time) seconds"
++    _avg = SPO_CALLS[] > 0 ? SPO_TIME[] / SPO_CALLS[] * 1000 : 0.0
++    println("[TIMING] DISTRICTNET-FY CMST(set-partition GLPK): calls=$(SPO_CALLS[]) total=$(round(SPO_TIME[],digits=2))s avg=$(round(_avg,digits=2))ms  (perturbed: nb_samples per FY gradient)")
+     return model
+ end
+ 

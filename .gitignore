@@ -1,0 +1,27 @@
+# heavy artifacts: regenerated or downloaded on the server, never committed
+data/**
+!data/.gitkeep
+results/**
+!results/.gitkeep
+**/output/
+**/exp_results/
+**/models/
+**/*.pt
+**/*.pth
+# DistrictNet / InferOpt generated inputs and solutions
+DistrictNet/data/
+DistrictNet/deps/Scenario/
+InferOpt_DSIRP/instances/
+InferOpt_DSIRP/training/solutions/
+# julia + python build state
+**/__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+julia-depot/
+**/Manifest.toml.bak*
+# latex
+*.aux
+*.log
+*.out
+*.synctex.gz
