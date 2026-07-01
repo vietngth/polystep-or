@@ -72,10 +72,65 @@ Additionally, you may find this [repository](https://github.com/tumBAIS/euro-mee
 
 ## How this code is used in the PolyStep study
 
-This directory is Toni Greif et al.'s upstream code, used unchanged apart from the small adapter noted in `POLYSTEP_CHANGES.md`. It plays three roles, and the third is where PolyStep departs.
+Upstream Toni Greif et al. code, unchanged except for `POLYSTEP_CHANGES.md`. Three parts, each shown with the code that does it.
 
-**1. Data and label generation (the expensive expert).** The DSIRP instances in `instances/` are released data: customer locations and per-customer demand history. `src/sirp_model.jl` builds an instance and holds the per-customer demand sampler `sample_demands`; the `pattern` argument (normal, bimodal, uniform) selects the demand distribution the scenarios are drawn from. During training, at each visited state, DAgger draws demand scenarios from this sampler and then `src/sirp_solver.jl` solves an anticipative, perfect-information IRP-MILP over those scenarios and returns the optimal routing decision as a `label`. That MILP solve is the label-generation step: it is the expert whose decisions the learner is trained to imitate, and it is by far the most expensive part of the pipeline (a full multi-period mixed-integer program solved at every state, of which DAgger visits many thousands).
+### 1. Data and label generation (the expert)
 
-**2. Training (the "Toni" column).** `train_pipeline.jl` runs the DAgger loop in `src/pipeline_dagger.jl`. It rolls out the current policy, samples scenarios, calls the expert of step 1 to produce labels, and updates the predictor `φ_w` by minimizing a Fenchel-Young loss, `FenchelYoungLoss(PerturbedAdditive(...))`, between the predicted prize parametrization and the expert label. The trained predictor is the generalized linear model in `src/stat_model.jl`: a small, interpretable set of weights (an inventory term `w_inv`, a penalty term `w_pen`, and a regression) that maps inventory and penalty features to a per-customer prize. Those prizes feed the CPCTSP oracle (`src/pctsp.jl`), and the resulting policy is rolled out and scored by `src/evaluation_pipeline.jl` as the realized cost (holding plus shortage plus routing). This produces the trained weights that define the "Toni" column of the inventory-routing comparison.
+Each customer's demand is sampled from a per-customer distribution picked by `pattern` (`src/sirp_model.jl`):
 
-**3. How PolyStep uses training but generates no labels.** PolyStep reuses the same two ingredients, the predictor `φ_w` (features to prizes) and the deploy pipeline (predict a prize, solve the CPCTSP, roll the policy forward, read the realized cost), but it trains `φ_w` by minimizing that realized rollout cost directly and gradient-free, rather than by imitating an expert. It therefore never calls `src/sirp_solver.jl` and never produces a target label; it needs only the released demand history and the rollout simulator. Put side by side, DAgger is "sample scenarios, solve the perfect-information MILP for a target decision, imitate it," while PolyStep is "predict prizes, solve the CPCTSP, roll out, read the realized cost, take a gradient-free step." The label-generation MILP, the costly heart of this code, is exactly what PolyStep skips. In this repository PolyStep's own inventory-routing training runs in the Python track (`exp_irp_headtohead.py`, `exp_irp_polystep.py`, `irp_gpu.py`), which reuses these released instances and a faithful port of the CPCTSP and the rollout simulator, but not the Julia expert. The Toni column still comes from this Julia code, so the comparison uses the authors' trained policy against PolyStep's label-free one on the identical instances and simulator.
+```julia
+if pattern == "normal"
+    d = Normal(data["mean_demand"][id], data["std_demand"][id])
+    instance.sample_demands[_id] = truncated(d, 0., instance.max_inventory[_id])
+elseif pattern == "uniform"                              # our added branch
+    d = Uniform(0., 0.5 * instance.max_inventory[_id])
+    instance.sample_demands[_id] = d
+```
+
+At each visited state, DAgger draws scenarios from `sample_demands` and solves a perfect-information IRP-MILP over them. The optimal routing decision becomes the training `label` (`src/sirp_solver.jl`):
+
+```julia
+@objective(m, Min,
+    sum(... penalty_cost[i] * l[s,i,t] ...) +   # stock-out
+    sum(... holding_cost[i] * I[s,i,t] ...) +   # holding
+    sum(... distances[i][j] * x[s,i,j,t] ...))  # routing
+JuMP.optimize!(m)
+label = (transpose(x_val) .+ x_val) .> 0.5      # the target the learner must imitate
+return label
+```
+
+This MILP, solved at every one of the many states DAgger visits, is the expensive label generation.
+
+### 2. Training the predictor (the "Toni" column)
+
+The predictor is a small, interpretable GLM: two weight vectors over inventory and penalty features that produce a per-customer prize (`src/stat_model.jl`):
+
+```julia
+weighted_inventory = Chain(single_inventory, Dense(weights["1"], false), vec)  # w_inv
+weighted_penalty   = Chain(single_penalty,   Dense(weights["2"], false), vec)  # w_pen
+return Parallel(+, α=weighted_inventory, β=weighted_penalty), regression       # φ_w
+```
+
+`train_pipeline.jl` (DAgger, in `src/pipeline_dagger.jl`) fits `φ_w` by imitating the expert label with a Fenchel-Young loss:
+
+```julia
+loss      = FenchelYoungLoss(PerturbedAdditive(pctsp; ε=fyl_epsilon, nb_samples=fyl_samples))
+flux_loss = sample -> loss(φ_w(sample.feature_array), sample.label[:,:,1]; sample=sample)
+#                                                      ^^^^^^^^^^^^  the expert target from step 1
+```
+
+### 3. PolyStep: same predictor, no labels
+
+PolyStep reuses that predictor and the deploy pipeline but minimizes the realized rollout cost directly, gradient-free. No expert, no label; the objective is only the simulated closed-loop cost (`script/exp_irp_polystep.py`):
+
+```python
+def mean_rollout_cost(w_inv, w_pen, instances, scenarios, horizon):
+    """Average realized rollout cost over (instance, scenario) for one parameter set."""
+    for inst in instances:
+        for s in scenarios:
+            c, _ = rollout(pt, inst, dseq, horizon=horizon)   # holding + shortage + routing
+            tot += c
+    return tot / n          # <- the PolyStep objective. No sirp_solver, no label.
+```
+
+So DAgger is "sample scenarios, solve the MILP for a target, imitate it," while PolyStep is "predict prizes, solve the CPCTSP, roll out, read the realized cost, take a gradient-free step." PolyStep never calls `src/sirp_solver.jl`, so it skips the costly label generation entirely and needs only the released demand history plus the rollout simulator. The Toni column still comes from this Julia code, so the comparison pits the authors' trained policy against PolyStep's label-free one on identical instances and the same simulator.
