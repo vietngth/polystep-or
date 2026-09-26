@@ -1,0 +1,22 @@
+diff --git a/Energy/Trainer/get_energy.py b/Energy/Trainer/get_energy.py
+index c9fe510..18deda5 100644
+--- a/Energy/Trainer/get_energy.py
++++ b/Energy/Trainer/get_energy.py
+@@ -63,7 +63,7 @@ def get_energy_pandas(fname=None):
+     if fname == None:
+         fname = "prices2013.dat"
+ 
+-    df = pd.read_csv(fname, delim_whitespace=True, quotechar='"')
++    df = pd.read_csv(fname, sep=r"\s+", quotechar='"')
+     # remove unnecessary columns
+     df.drop(['#DateTime', 'Holiday', 'ActualWindProduction', 'SystemLoadEP2'], axis=1, inplace=True)
+     # remove columns with missing values
+@@ -73,7 +73,7 @@ def get_energy_pandas(fname=None):
+     # df[pd.isnull(df).any(axis=1)]
+     # impute missing CO2 intensities linearly
+     df.loc[df.loc[:,'CO2Intensity'] == 0, 'CO2Intensity'] = np.nan # an odity
+-    df.loc[:,'CO2Intensity'].interpolate(inplace=True)
++    df['CO2Intensity'] = df['CO2Intensity'].interpolate()
+     # remove remaining 3 days with missing values
+     grouplength = 48
+     for i in range(0, len(df), grouplength):

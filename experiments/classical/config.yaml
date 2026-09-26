@@ -1,0 +1,36 @@
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+patience: 10
+problems:
+  shortestpath:
+    values: [1, 2, 4, 6, 8]
+    config: cosB
+    steps: 150
+    batch_size: 128
+    workers: 8
+  knapsack:
+    values: [60, 120, 180]
+    config: cosB
+    steps: 100
+    batch_size: 128
+    workers: 1
+  energy:
+    values: [1, 2, 3]
+    config: cosB
+    steps: 100
+    batch_size: 128
+    workers: 32
+    solver: {1: gurobi, 2: highs, 3: highs}
+  matching:
+    values: [1, 2, 3]
+    config: cosB
+    steps: 100
+    batch_size: 128
+    workers: 32
+  portfolio:
+    values: [1, 4, 8, 16]
+    config: cosA
+    steps: 100
+    batch_size: 128
+    workers: 1
+    scale: 1000.0
+    metric: absolute regret

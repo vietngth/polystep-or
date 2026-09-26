@@ -1,0 +1,7 @@
+third_party/
+results/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+*.pyc
+.venv/

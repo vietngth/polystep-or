@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "polystep-or"
+version = "1.0.0"
+description = "Label-free decision-focused learning with PolyStep"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+authors = [{ name = "The PolystepOR authors" }]
+dependencies = [
+    "polystep==0.13.0",
+    "torch>=2.8,<3",
+    "numpy>=2.0,<3",
+    "scipy>=1.13,<2",
+    "optuna==4.9.0",
+    "pyyaml==6.0.3",
+]
+
+[dependency-groups]
+experiments = [
+    "torch==2.13.0",
+    "numpy==2.5.2",
+    "scipy==1.18.0",
+    "pandas==3.0.3",
+    "scikit-learn==1.9.0",
+    "networkx==3.6.1",
+    "matplotlib==3.10.3",
+    "einops==0.8.1",
+    "ortools==9.15.6755",
+    "gurobipy==13.0.2",
+    "highspy==1.14.0",
+    "cvxpy==1.9.1",
+    "cvxpylayers==1.2.0",
+    "pytorch-lightning==2.6.5",
+    "tqdm==4.70.0",
+    "qpth==0.0.18",
+    "geopandas==1.1.1",
+    "shapely==2.1.2",
+]
+alloy = [
+    "torch==2.8.0",
+    "numpy==2.2.3",
+    "scipy==1.15.2",
+    "pandas==2.2.3",
+    "scikit-learn==1.6.1",
+    "networkx==3.4.2",
+    "einops==0.8.1",
+    "gurobipy==13.0.2",
+    "lightning==2.5.0",
+    "pytorch-lightning==2.5.0",
+    "tqdm==4.67.1",
+]
+test = ["pytest==8.4.2"]
+
+[tool.uv]
+default-groups = ["experiments", "test"]
+conflicts = [[{ group = "experiments" }, { group = "alloy" }]]
+
+[[tool.uv.dependency-metadata]]
+name = "qpth"
+version = "0.0.18"
+requires-dist = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

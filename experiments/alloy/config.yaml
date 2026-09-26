@@ -1,0 +1,37 @@
+epochs: 20
+batch_size: 32
+eval_batch_size: 64
+penalty_term: 0.5
+loader_workers: 2
+solver_workers: 1
+polystep_seed: 0
+eps1: 0.05
+polystep:
+  subspace: adaptive
+  scale_cost: raw
+  solver: null
+  adaptive_num_probe: null
+  polytope: orthoplex
+  max_subspace_dim: null
+modes: [constant, moving]
+final_seeds: [11, 12, 13, 14, 15]
+tuning:
+  strategy: sobol
+  n_trials: 32
+  seed: 0
+  digits: 4
+  seeds: [7, 8]
+  space:
+    step_radius: [log, 1.0, 5000.0]
+    probe_radius: [log, 10.0, 100000.0]
+    eps0: [lin, 0.1, 1.0]
+    subspace_rank: [8, 32, 128]
+    num_probe: [1, 2]
+    use_momentum: [false, true]
+  moving_space:
+    step_decay_ratio: [lin, 0.05, 0.5]
+reported_best:
+  constant: {step_radius: 6.2353, probe_radius: 948.0546, eps0: 0.5652, subspace_rank: 128,
+             num_probe: 1, use_momentum: true}
+  moving: {step_radius: 2.6658, probe_radius: 652.5121, eps0: 0.7067, subspace_rank: 128,
+           num_probe: 2, use_momentum: false, step_decay_ratio: 0.4715}

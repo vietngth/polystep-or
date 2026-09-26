@@ -1,0 +1,75 @@
+seeds: [0, 1, 2, 3, 4]
+splits: [0, 1, 2]
+polystep:
+  config: flatSNN
+  overrides:
+    max_subspace_dim: null
+  schedule_epochs: 25
+  monitor: val_signed_cost
+  lr: 0.005
+  min_delta: 0
+  workers:
+    stochastic_capacity_kp: 4
+    stochastic_weights_kp: 8
+    wsmc: 8
+authors_methods:
+  MLE: {lr: 0.005, monitor: val_mse, min_delta: 1, covariance_type: trainable,
+        init_log_std_dev: 0, distr_type: gaussian}
+  SFGE: {lr: 0.005, covariance_type: trainable, init_log_std_dev: 0, monitor: val_regret,
+         std_batch_vals: true, distr_type: gaussian}
+common:
+  n: 1000
+  input_dim: 5
+  deg: 5
+  mult_noise: 0.1
+  add_noise: 0.03
+  epochs: 500
+  patience: 10
+  batch_size: 32
+  log_every_n_steps: 50
+  num_runs_per_seed: 1
+  prop_training: 0.8
+  prop_validation: 0.1
+  torch_seed: 0
+  parallelize_runs: false
+  scale_predictions: {learnable: false}
+  plot_with_log_scale: true
+  polytope_type: orthoplex
+families:
+  stochastic_capacity_kp:
+    optimization_problem: stochastic_capacity_kp
+    problem_dim: 50
+    output_dim: 1
+    correlate_values_and_weights: 1
+    rho: 0.0
+  stochastic_weights_kp:
+    optimization_problem: stochastic_weights_kp
+    output_dim: 50
+    relative_capacity: 0.2
+    correlate_values_and_weights: 1
+    rho: 0.0
+  wsmc_5x25:
+    optimization_problem: wsmc
+    output_dim: 5
+    num_prods: 5
+    num_sets: 25
+    monitor: val_regret
+  wsmc_10x50:
+    optimization_problem: wsmc
+    output_dim: 10
+    num_prods: 10
+    num_sets: 50
+    monitor: val_regret
+cells:
+  sckp_50_penalty_5: {family: stochastic_capacity_kp, penalty: 5}
+  sckp_50_penalty_10: {family: stochastic_capacity_kp, penalty: 10}
+  sckp_50_penalty_20: {family: stochastic_capacity_kp, penalty: 20}
+  swkp_50_penalty_5: {family: stochastic_weights_kp, penalty: 5}
+  swkp_50_penalty_10: {family: stochastic_weights_kp, penalty: 10}
+  swkp_50_penalty_20: {family: stochastic_weights_kp, penalty: 20}
+  wsmc_5x25_penalty_1: {family: wsmc_5x25, penalty_factor: 1.0}
+  wsmc_5x25_penalty_5: {family: wsmc_5x25, penalty_factor: 5.0}
+  wsmc_5x25_penalty_10: {family: wsmc_5x25, penalty_factor: 10.0}
+  wsmc_10x50_penalty_1: {family: wsmc_10x50, penalty_factor: 1.0}
+  wsmc_10x50_penalty_5: {family: wsmc_10x50, penalty_factor: 5.0}
+  wsmc_10x50_penalty_10: {family: wsmc_10x50, penalty_factor: 10.0}

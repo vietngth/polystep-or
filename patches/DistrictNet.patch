@@ -1,0 +1,486 @@
+diff --git a/experiment_evaluator.jl b/experiment_evaluator.jl
+index 26617e0..691f660 100644
+--- a/experiment_evaluator.jl
++++ b/experiment_evaluator.jl
+@@ -20,12 +20,12 @@ const EXPERIMENTS = Dict(
+ 
+ const CITIES = ["London", "Leeds", "Bristol", "Manchester", "Paris", "Lyon", "Marseille"]
+ const DISTRICT_SIZES = [3, 6, 12, 20, 30]
+-solution_types = ["districtNet", "predictGnn", "BD", "FIG", "AvgTSP"]
++solution_types = ["districtNet", "predictGnn", "BD", "FIG", "AvgTSP", "polyStep"]
+ 
+ 
+ const NB_BU_LARGE = 120
+ const DEPOT_LOCATION = "C"
+-const NB_SCENARIO = 10
++const NB_SCENARIO = parse(Int, get(ENV, "NB_SCENARIO", "10"))
+ """
+     readSolution(solution_path)
+ 
+diff --git a/experiments.jl b/experiments.jl
+index bb4dcaf..a4ea10f 100644
+--- a/experiments.jl
++++ b/experiments.jl
+@@ -3,12 +3,16 @@ include("src/Estimators/FIG.jl")
+ include("src/Estimators/predictGnn.jl")
+ include("src/Estimators/AvgTsp.jl")
+ include("src/districtNet.jl")
++include("src/Estimators/polyStep.jl")
++using Distributed
++nworkers() > 1 && @everywhere workers() include("src/Estimators/polyStep.jl")
+ 
+ using .BD
+ using .FIG
+ using .predictGnn
+ using .districtNet
+ using .AvgTSP
++using .polyStep
+ using Statistics
+ 
+ """
+@@ -108,7 +112,7 @@ function find_solution(
+     modelModule,
+     training_result,
+ )
+-    if modelModule == districtNet || modelModule == predictGnn
++    if modelModule == districtNet || modelModule == predictGnn || modelModule == polyStep
+         return modelModule.find_solution_city(
+             city,
+             district_size,
+@@ -143,7 +147,7 @@ A `Solution` object representing the districting solution for the small city.
+ """
+ 
+ function find_solution_small(city::String, district_size::Int, modelModule, training_result)
+-    if modelModule == districtNet|| modelModule == predictGnn
++    if modelModule == districtNet|| modelModule == predictGnn || modelModule == polyStep
+         return modelModule.find_solution_small_city(city, district_size, training_result...)
+     else
+         return modelModule.find_solution_small_city(city, district_size, training_result)
+diff --git a/src/Estimators/AvgTsp.jl b/src/Estimators/AvgTsp.jl
+index 5f98841..76085bc 100644
+--- a/src/Estimators/AvgTsp.jl
++++ b/src/Estimators/AvgTsp.jl
+@@ -34,7 +34,7 @@ const STRATEGY = "AvgTSP"
+ const NB_SCENARIO = 1
+ 
+ # Solver Hyperparameters
+-const MAX_TIME = 1200
++const MAX_TIME = parse(Int, get(ENV, "DN_MAX_TIME", "1200"))
+ const PERTURBATION_PROBABILITY = 0.985
+ const PENALITY = 10000
+ 
+diff --git a/src/Estimators/BD.jl b/src/Estimators/BD.jl
+index d406fdb..2fbd0c8 100644
+--- a/src/Estimators/BD.jl
++++ b/src/Estimators/BD.jl
+@@ -32,7 +32,7 @@ const STRATEGY = "BD"
+ const NB_SCENARIO = 100
+ 
+ # Solver Hyperparameters
+-const MAX_TIME = 1200
++const MAX_TIME = parse(Int, get(ENV, "DN_MAX_TIME", "1200"))
+ const PERTURBATION_PROBABILITY = 0.985
+ const PENALITY = 10000
+ 
+diff --git a/src/Estimators/FIG.jl b/src/Estimators/FIG.jl
+index 8b5a3a2..2c98e32 100644
+--- a/src/Estimators/FIG.jl
++++ b/src/Estimators/FIG.jl
+@@ -33,7 +33,7 @@ const NB_SCENARIO = 100
+ 
+ 
+ # Solver Hyperparameters
+-const MAX_TIME = 1200
++const MAX_TIME = parse(Int, get(ENV, "DN_MAX_TIME", "1200"))
+ const PERTURBATION_PROBABILITY = 0.985
+ const PENALITY = 10000
+ 
+diff --git a/src/Estimators/predictGnn.jl b/src/Estimators/predictGnn.jl
+index 784ae2b..8342867 100644
+--- a/src/Estimators/predictGnn.jl
++++ b/src/Estimators/predictGnn.jl
+@@ -36,11 +36,11 @@ const NB_SCENARIO = 100
+ const BATCH_SIZE = 64
+ const HIDDEN_SIZE = 64
+ const INITIAL_LR = 0.0001
+-const NB_EPOCHS = 1000
++const NB_EPOCHS = parse(Int, get(ENV, "PREDGNN_EPOCHS", "1000"))
+ const SIGNIFICANT_LOSS_CHANGE_THRESHOLD = 0.0001
+ 
+ # Solver Hyperparameters
+-const MAX_TIME = 1200
++const MAX_TIME = parse(Int, get(ENV, "DN_MAX_TIME", "1200"))
+ const PERTURBATION_PROBABILITY = 0.985
+ const PENALITY = 10000
+ 
+@@ -375,11 +375,14 @@ Trains a general GNN model using data from multiple cities.
+ """
+ 
+ function fitGeneralModel(nb_data)
++    seeded = get(ENV, "DN_SEEDED", "0") == "1"
++    seeded && Random.seed!(parse(Int, ENV["DN_SEED"]))
+     cities = ["city" * string(i) for i = 1:nb_data]
+     target_district_size = 3
+     train_loader, train_mean, train_std = aggregateCityTrainingData(cities, target_district_size)
+-    model_name = "models/GeneralPredictGnn.jld2"
+-    state_name = "models/GeneralPredictGnn_state.json"
++    seed_tag = seeded ? "_s$(ENV["DN_SEED"])" : ""
++    model_name = "models/GeneralPredictGnn$(seed_tag).jld2"
++    state_name = "models/GeneralPredictGnn$(seed_tag)_state.json"
+     if isfile(model_name)
+         @info "Loading model from file"
+         model_state = JLD2.load(model_name, "model_state")
+diff --git a/src/Solver/Kruskal.jl b/src/Solver/Kruskal.jl
+index 92697d4..b040d5c 100644
+--- a/src/Solver/Kruskal.jl
++++ b/src/Solver/Kruskal.jl
+@@ -351,6 +351,80 @@ function repair_max_districts(instance::Instance, districts::Vector{Vector{Int}}
+     return districts
+ end
+ 
++"""
++    is_node_adjacent_to_district(instance::Instance, node::Int, dnodes::Vector{Int})
++
++True if `node` shares a graph edge with any block in district `dnodes` (depot excluded by construction).
++"""
++function is_node_adjacent_to_district(instance::Instance, node::Int, dnodes::Vector{Int})
++    for nb in neighbors(instance.graph, node)
++        if nb in dnodes
++            return true
++        end
++    end
++    return false
++end
++
++"""
++    dissolve_district!(instance::Instance, districts::Vector{Vector{Int}}, i::Int)
++
++Empties an undersized district `i` by reassigning each of its blocks into a connected neighbouring
++district that still has spare capacity (`size < max_district_size`). Peeling boundary blocks first
++keeps every receiving district connected. Returns `true` if district `i` was fully emptied.
++"""
++function dissolve_district!(instance::Instance, districts::Vector{Vector{Int}}, i::Int)
++    progress = true
++    while !isempty(districts[i]) && progress
++        progress = false
++        neighborPairs = findNeighborDistricts(instance, districts)
++        nbr_ids = sort(find_id_neighbors(i, neighborPairs), by = x -> length(districts[x]))
++        for node in copy(districts[i])
++            placed = false
++            for j in nbr_ids
++                j == i && continue
++                length(districts[j]) >= instance.max_district_size && continue
++                if is_node_adjacent_to_district(instance, node, districts[j])
++                    push!(districts[j], node)
++                    districts[i] = setdiff(districts[i], [node])
++                    placed = true
++                    progress = true
++                    break
++                end
++            end
++            placed && break
++        end
++    end
++    return isempty(districts[i])
++end
++
++"""
++    dissolve_min_districts(instance::Instance, districts::Vector{Vector{Int}})
++
++Last-resort repair for orphan (undersized) districts that grow/shrink cannot fix — e.g. when
++`2*min_district_size > max_district_size` makes merging two undersized districts impossible. Each
++orphan is dissolved into connected neighbours with room, reducing the district count by one. Empty
++districts are dropped. Terminates when no remaining orphan can be dissolved.
++"""
++function dissolve_min_districts(instance::Instance, districts::Vector{Vector{Int}})
++    districts = filter(d -> !isempty(d), districts)
++    changed = true
++    while changed
++        changed = false
++        order = sort(collect(1:length(districts)), by = x -> length(districts[x]))
++        for i in order
++            i > length(districts) && continue
++            if length(districts[i]) < instance.min_district_size
++                if dissolve_district!(instance, districts, i)
++                    districts = filter(d -> !isempty(d), districts)
++                    changed = true
++                    break
++                end
++            end
++        end
++    end
++    return districts
++end
++
+ """
+     repair_districts(instance::Instance, districts::Vector{Vector{Int}})
+ 
+@@ -364,6 +438,148 @@ Repairs districting solutions that do not respect the district size constraints.
+ - The repaired list of districts.
+ """
+ 
++
++function _district_adjacency(instance::Instance, districts::Vector{Vector{Int}})
++    nd = length(districts)
++    adj = [Int[] for _ = 1:nd]
++    neighborPairs = findNeighborDistricts(instance, districts)
++    for (pair, _) in neighborPairs
++        push!(adj[pair[1]], pair[2])
++        push!(adj[pair[2]], pair[1])
++    end
++    return adj
++end
++
++function _move_boundary_node!(instance::Instance, districts::Vector{Vector{Int}}, from::Int, to::Int)
++    to_boundary = get_nodes_neighbor(instance, districts, to)
++    for node in districts[from]
++        if node in to_boundary
++            sub, _ = induced_subgraph(instance.graph, setdiff(districts[from], [node]))
++            if is_connected(sub)
++                districts[from] = setdiff(districts[from], [node])
++                push!(districts[to], node)
++                return true
++            end
++        end
++    end
++    return false
++end
++
++function _cascade_grow_once!(instance::Instance, districts::Vector{Vector{Int}}, orphan::Int)
++    adj = _district_adjacency(instance, districts)
++    nd = length(districts)
++    parent = fill(0, nd)
++    visited = falses(nd)
++    visited[orphan] = true
++    queue = [orphan]
++    donor = 0
++    while !isempty(queue)
++        u = popfirst!(queue)
++        if u != orphan && length(districts[u]) > instance.min_district_size
++            donor = u
++            break
++        end
++        for v in adj[u]
++            if !visited[v]
++                visited[v] = true
++                parent[v] = u
++                push!(queue, v)
++            end
++        end
++    end
++    donor == 0 && return false
++    path = Int[]
++    cur = donor
++    while cur != 0
++        push!(path, cur)
++        cur = parent[cur]
++    end
++    for j = 1:(length(path) - 1)
++        _move_boundary_node!(instance, districts, path[j], path[j + 1]) || return false
++    end
++    return true
++end
++
++function repair_min_districts_cascade(instance::Instance, districts::Vector{Vector{Int}})
++    MAX_PASSES = 100 * length(districts)
++    passes = 0
++    changed = true
++    while changed && passes < MAX_PASSES
++        changed = false
++        for i = 1:length(districts)
++            while length(districts[i]) < instance.min_district_size && passes < MAX_PASSES
++                _cascade_grow_once!(instance, districts, i) || break
++                changed = true
++                passes += 1
++            end
++        end
++    end
++    return districts
++end
++
++
++function _cascade_shrink_once!(instance::Instance, districts::Vector{Vector{Int}}, over::Int)
++    adj = _district_adjacency(instance, districts)
++    nd = length(districts)
++    parent = fill(0, nd)
++    visited = falses(nd)
++    visited[over] = true
++    queue = [over]
++    receiver = 0
++    while !isempty(queue)
++        u = popfirst!(queue)
++        if u != over && length(districts[u]) < instance.max_district_size
++            receiver = u
++            break
++        end
++        for v in adj[u]
++            if !visited[v]
++                visited[v] = true
++                parent[v] = u
++                push!(queue, v)
++            end
++        end
++    end
++    receiver == 0 && return false
++    path = Int[]
++    cur = receiver
++    while cur != 0
++        push!(path, cur)
++        cur = parent[cur]
++    end
++    for j = length(path):-1:2
++        _move_boundary_node!(instance, districts, path[j], path[j - 1]) || return false
++    end
++    return true
++end
++
++function repair_max_districts_cascade(instance::Instance, districts::Vector{Vector{Int}})
++    MAX_PASSES = 100 * length(districts)
++    passes = 0
++    changed = true
++    while changed && passes < MAX_PASSES
++        changed = false
++        for i = 1:length(districts)
++            while length(districts[i]) > instance.max_district_size && passes < MAX_PASSES
++                _cascade_shrink_once!(instance, districts, i) || break
++                changed = true
++                passes += 1
++            end
++        end
++    end
++    return districts
++end
++
++
++"""
++    repair_districts(instance::Instance, districts::Vector{Vector{Int}})
++
++Repairs districting solutions that do not respect the size constraints, in escalating stages: plain
++grow/shrink, then constraint-aware cascading chain-repair on BOTH sides (grow undersized / shed
++oversized by relocating nodes along a path to a district with spare capacity, keeping the full
++district count and working under the 2*min>max no-split window), then last-resort dissolve only if a
++violation has no reachable donor/receiver.
++"""
+ function repair_districts(instance::Instance, districts::Vector{Vector{Int}})
+     MAX_ITER = 10
+     iter = 1
+@@ -371,8 +587,21 @@ function repair_districts(instance::Instance, districts::Vector{Vector{Int}})
+     while !is_valid_solution && iter <= MAX_ITER
+         districts = repair_max_districts(instance, districts)
+         districts = repair_min_districts(instance, districts)
++        is_valid_solution = is_valid_districting_solution(instance, districts)
+         iter += 1
+     end
++    cpass = 0
++    while !is_valid_districting_solution(instance, districts) && cpass < 3
++        districts = repair_min_districts_cascade(instance, districts)
++        districts = repair_max_districts_cascade(instance, districts)
++        districts = repair_max_districts(instance, districts)
++        districts = repair_min_districts(instance, districts)
++        cpass += 1
++    end
++    if !is_valid_districting_solution(instance, districts)
++        districts = dissolve_min_districts(instance, districts)
++        districts = repair_max_districts(instance, districts)
++    end
+     return districts
+ end
+ 
+diff --git a/src/Solver/exactsolver.jl b/src/Solver/exactsolver.jl
+index 09108ce..99d1304 100644
+--- a/src/Solver/exactsolver.jl
++++ b/src/Solver/exactsolver.jl
+@@ -110,10 +110,17 @@ function set_partitioning_optimizer(node_matrix, mst_costs, num_vertices, num_su
+         )
+     end
+     @constraint(model, sum(y) == num_subgraphs)
++    time_limit = parse(Float64, get(ENV, "DN_SPO_TM_LIM_S", "0"))
++    time_limit > 0 && set_optimizer_attribute(model, "tm_lim", round(Int, 1000 * time_limit))
+     optimize!(model)
+ 
+-    if termination_status(model) == MOI.OPTIMAL
++    status = termination_status(model)
++    if status == MOI.OPTIMAL
+         return value.(y)
++    elseif status == MOI.TIME_LIMIT && primal_status(model) == MOI.FEASIBLE_POINT
++        return round.(value.(y))
++    elseif status == MOI.TIME_LIMIT
++        error("set partition time limit $(time_limit)s without incumbent")
+     else
+         return 0
+     end
+diff --git a/src/district.jl b/src/district.jl
+index 12cd465..ca493e4 100644
+--- a/src/district.jl
++++ b/src/district.jl
+@@ -67,7 +67,16 @@ function compute_cost_via_SAA(instance::Instance, nodes::Array{Int})
+     nodes = nodes .- 1
+     formatted_nodes = "{" * join(nodes, ", ") * "}"
+     target = string( instance.city_name, "_", instance.depot, "_", instance.num_blocks, "_", instance.target_district_size, "_", NB_SCENARIO)
+-    return EVmain(formatted_nodes, target)
++    local err
++    for attempt in 1:6
++        try
++            return EVmain(formatted_nodes, target)
++        catch e
++            err = e
++            sleep(2.0 * attempt)
++        end
++    end
++    rethrow(err)
+ end
+ 
+ """
+@@ -89,7 +98,11 @@ function compute_cost_via_CMST(instance::Instance, district::District)
+         return PENALITY * instance.max_district_size
+     end
+     sub_graph, _ = induced_subgraph(instance.graph, nodes)
+-    cost = sum(get_prop(sub_graph, edge, :weight) for edge in prim_mst(sub_graph))
++    mst_edges = prim_mst(sub_graph)
++    if length(mst_edges) < length(nodes) - 1
++        return PENALITY * instance.max_district_size
++    end
++    cost = sum(get_prop(sub_graph, edge, :weight) for edge in mst_edges)
+     ls, us = instance.min_district_size, instance.max_district_size
+     cost += PENALITY * max(0, length(district.nodes) - us, ls - length(district.nodes))
+     return cost + compute_depot_cost(instance, nodes)
+diff --git a/src/districtNet.jl b/src/districtNet.jl
+index d3d530d..0f5d018 100644
+--- a/src/districtNet.jl
++++ b/src/districtNet.jl
+@@ -10,7 +10,7 @@ using Combinatorics, Optim
+ using JuMP, GLPK, CxxWrap, DistributedArrays, JLD2
+ 
+ 
+-Random.seed!(1234)
++Random.seed!(get(ENV, "DN_SEEDED", "0") == "1" ? parse(Int, ENV["DN_SEED"]) : 1234)
+ include("utils.jl")
+ include("struct.jl")
+ include("instance.jl")
+@@ -42,7 +42,7 @@ const NB_EPOCHS = 100
+ const MC_SAMPLES = 20
+ 
+ # Solver Hyperparameters
+-const MAX_TIME = 1200
++const MAX_TIME = parse(Int, get(ENV, "DN_MAX_TIME", "1200"))
+ const PERTURBATION_PROBABILITY = 0.985
+ const PENALITY = 10000
+ # Helper functions
+@@ -160,7 +160,8 @@ function fitGeneralModel(nb_data)
+         NB_EPOCHS,
+         MC_SAMPLES,
+     )
+-    model_name = "models/GeneralDistrictNet_$(nb_data).jld2"
++    seeded = get(ENV, "DN_SEEDED", "0") == "1"
++    model_name = "models/GeneralDistrictNet_$(nb_data)$(seeded ? "_s$(ENV["DN_SEED"])" : "").jld2"
+     if isfile(model_name)
+         @info "Loading model from file"
+         model_state = JLD2.load(model_name, "model_state")
+@@ -168,6 +169,7 @@ function fitGeneralModel(nb_data)
+         Flux.loadmodel!(model, model_state)
+         return model, mean_train, std_train
+     end
++    seeded && Random.seed!(parse(Int, ENV["DN_SEED"]))
+     model = build_gnn_model(data_train[1][1].instance.graph, STRATEGY, HIDDEN_SIZE)
+     model = train_GNN(STRATEGY, model, data_train, data_test, hyperparams)
+     model_state = Flux.state(model)

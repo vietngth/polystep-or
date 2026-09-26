@@ -1,0 +1,22 @@
+diff --git a/utils/build_models.py b/utils/build_models.py
+index 0880838..6a88de9 100644
+--- a/utils/build_models.py
++++ b/utils/build_models.py
+@@ -12,6 +12,7 @@ from methods.mse import MSEModule
+ from methods.spo import SPOModule
+ from methods.blackbox import BlackboxModule
+ from methods.sfge import SFGEModule
++from methods.polystep import PolyStepModule
+ from methods.prob_regressor import ProbRegressorModule
+ from methods.sce import SCEModule
+ from utils.enums import DistributionTypes
+@@ -32,7 +33,8 @@ METHODS = {'MSE': MSEModule,
+            'SFGE': SFGEModule,
+            'SFGE+SCE': SFGEModule,
+            'SCE': SCEModule,
+-           'DPO': DPOModule}
++           'DPO': DPOModule,
++           'PolyStep': PolyStepModule}
+ 
+ # Methods that rely on a probabilistic model
+ PROB_METHODS = ['SFGE', 'SFGE+SCE', 'MLE']
